@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite://"
     sql_echo: bool = False
     seed_on_startup: bool = False
+    tabbycat_base_url: str | None = None
+    tabbycat_api_key: str | None = None
 
 
 settings = Settings()
