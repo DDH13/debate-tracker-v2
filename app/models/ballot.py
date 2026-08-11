@@ -40,6 +40,8 @@ class BallotPublic(BallotBase):
     id: int
     debate_id: int
     judge_id: int
+    discarded: bool = False
+    forfeit: bool = False
 
 
 class BallotPublicWithScores(BallotPublic):

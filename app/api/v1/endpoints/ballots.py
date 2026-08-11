@@ -286,7 +286,7 @@ def get_debate_result(debate_id: int, session: SessionDep) -> DebateResult:
     grouped: dict[tuple[int, Side, SpeakerPosition], list[float]] = {}
     for score in scores:
         key = (score.debater_id, score.side, score.position)
-        grouped.setdefault(key, []).append(score.score)
+        grouped.setdefault(key, []).append(score.final_score)
 
     speakers = [
         SpeakerAverage(

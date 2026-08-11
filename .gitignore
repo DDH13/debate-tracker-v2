@@ -5,3 +5,5 @@ venv/
 *.egg-info/
 .pytest_cache/
 .env
+*.DS_Store
+debate_tracker.db

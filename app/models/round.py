@@ -10,7 +10,9 @@ if TYPE_CHECKING:
 
 class RoundBase(SQLModel):
     seq: int
+    abbr: str | None = None
     name: str | None = None
+    isElimination: bool = False
     completed: bool = False
 
 
@@ -42,5 +44,7 @@ class RoundPublic(RoundBase):
 
 class RoundUpdate(SQLModel):
     seq: int | None = None
+    abbr: str | None = None
     name: str | None = None
+    isElimination: bool | None = None
     completed: bool | None = None

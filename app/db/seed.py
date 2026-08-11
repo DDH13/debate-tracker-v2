@@ -1,3 +1,5 @@
+from datetime import date
+
 from sqlmodel import Session
 
 from app.models import (
@@ -19,7 +21,7 @@ from app.models import (
 
 
 def seed(session: Session) -> None:
-    tournament = Tournament(name="Sample Open", slug="sample-open")
+    tournament = Tournament(name="Sample Open", date=date(2024, 6, 1), slug="sample-open")
     session.add(tournament)
     session.flush()
 
@@ -71,18 +73,18 @@ def seed(session: Session) -> None:
 
     session.add_all(
         [
-            TeamMember(team_id=teams[0].id, debater_id=debaters[0].id, speaker_position=1),
-            TeamMember(team_id=teams[0].id, debater_id=debaters[1].id, speaker_position=2),
-            TeamMember(team_id=teams[0].id, debater_id=debaters[2].id, speaker_position=3),
-            TeamMember(team_id=teams[1].id, debater_id=debaters[3].id, speaker_position=1),
-            TeamMember(team_id=teams[1].id, debater_id=debaters[4].id, speaker_position=2),
-            TeamMember(team_id=teams[1].id, debater_id=debaters[5].id, speaker_position=3),
-            TeamMember(team_id=teams[2].id, debater_id=debaters[6].id, speaker_position=1),
-            TeamMember(team_id=teams[2].id, debater_id=debaters[7].id, speaker_position=2),
-            TeamMember(team_id=teams[2].id, debater_id=debaters[8].id, speaker_position=3),
-            TeamMember(team_id=teams[3].id, debater_id=debaters[9].id, speaker_position=1),
-            TeamMember(team_id=teams[3].id, debater_id=debaters[10].id, speaker_position=2),
-            TeamMember(team_id=teams[3].id, debater_id=debaters[11].id, speaker_position=3),
+            TeamMember(team_id=teams[0].id, debater_id=debaters[0].id),
+            TeamMember(team_id=teams[0].id, debater_id=debaters[1].id),
+            TeamMember(team_id=teams[0].id, debater_id=debaters[2].id),
+            TeamMember(team_id=teams[1].id, debater_id=debaters[3].id),
+            TeamMember(team_id=teams[1].id, debater_id=debaters[4].id),
+            TeamMember(team_id=teams[1].id, debater_id=debaters[5].id),
+            TeamMember(team_id=teams[2].id, debater_id=debaters[6].id),
+            TeamMember(team_id=teams[2].id, debater_id=debaters[7].id),
+            TeamMember(team_id=teams[2].id, debater_id=debaters[8].id),
+            TeamMember(team_id=teams[3].id, debater_id=debaters[9].id),
+            TeamMember(team_id=teams[3].id, debater_id=debaters[10].id),
+            TeamMember(team_id=teams[3].id, debater_id=debaters[11].id),
         ]
     )
 
@@ -138,56 +140,56 @@ def seed(session: Session) -> None:
                     debater_id=debaters[0].id,
                     side=Side.PROP,
                     position=SpeakerPosition.FIRST,
-                    score=76.0,
+                    final_score=76.0,
                 ),
                 SpeakerScore(
                     ballot_id=ballot.id,
                     debater_id=debaters[1].id,
                     side=Side.PROP,
                     position=SpeakerPosition.SECOND,
-                    score=74.5,
+                    final_score=74.5,
                 ),
                 SpeakerScore(
                     ballot_id=ballot.id,
                     debater_id=debaters[2].id,
                     side=Side.PROP,
                     position=SpeakerPosition.THIRD,
-                    score=75.0,
+                    final_score=75.0,
                 ),
                 SpeakerScore(
                     ballot_id=ballot.id,
                     debater_id=debaters[0].id,
                     side=Side.PROP,
                     position=SpeakerPosition.REPLY,
-                    score=38.0,
+                    final_score=38.0,
                 ),
                 SpeakerScore(
                     ballot_id=ballot.id,
                     debater_id=debaters[3].id,
                     side=Side.OPP,
                     position=SpeakerPosition.FIRST,
-                    score=75.5,
+                    final_score=75.5,
                 ),
                 SpeakerScore(
                     ballot_id=ballot.id,
                     debater_id=debaters[4].id,
                     side=Side.OPP,
                     position=SpeakerPosition.SECOND,
-                    score=75.0,
+                    final_score=75.0,
                 ),
                 SpeakerScore(
                     ballot_id=ballot.id,
                     debater_id=debaters[5].id,
                     side=Side.OPP,
                     position=SpeakerPosition.THIRD,
-                    score=74.0,
+                    final_score=74.0,
                 ),
                 SpeakerScore(
                     ballot_id=ballot.id,
                     debater_id=debaters[4].id,
                     side=Side.OPP,
                     position=SpeakerPosition.REPLY,
-                    score=37.5,
+                    final_score=37.5,
                 ),
             ]
         )

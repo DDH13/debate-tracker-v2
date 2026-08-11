@@ -10,9 +10,10 @@ if TYPE_CHECKING:
 
 class TournamentBase(SQLModel):
     name: str
+    abbr: str | None = None
+    base_url: str | None = None
     slug: str = Field(unique=True, index=True)
-    start_date: date | None = None
-    end_date: date | None = None
+    date: date | None = None
 
 
 class Tournament(TournamentBase, table=True):
@@ -40,6 +41,7 @@ class TournamentPublic(TournamentBase):
 
 class TournamentUpdate(SQLModel):
     name: str | None = None
+    abbr: str | None = None
     slug: str | None = None
-    start_date: date | None = None
-    end_date: date | None = None
+    base_url: str | None = None
+    date: date | None = None

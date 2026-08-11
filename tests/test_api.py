@@ -132,7 +132,7 @@ def test_institution_debater_team_roster_flow(client: TestClient) -> None:
 
     add_resp = client.post(
         f"/api/v1/teams/{team['id']}/members",
-        json={"debater_id": debater["id"], "speaker_position": 1},
+        json={"debater_id": debater["id"]},
     )
     assert add_resp.status_code == 201
 
@@ -195,29 +195,6 @@ def test_duplicate_team_member_debater_is_409(client: TestClient) -> None:
 
     second = client.post(
         f"/api/v1/teams/{team['id']}/members", json={"debater_id": debater["id"]}
-    )
-    assert second.status_code == 409
-
-
-def test_duplicate_speaker_position_is_409(client: TestClient) -> None:
-    debater_1 = client.post("/api/v1/debaters", json={"name": "Speaker One"}).json()
-    debater_2 = client.post("/api/v1/debaters", json={"name": "Speaker Two"}).json()
-    tournament = client.post(
-        "/api/v1/tournaments", json={"name": "Speaker Tournament", "slug": "speaker-tournament"}
-    ).json()
-    team = client.post(
-        f"/api/v1/tournaments/{tournament['id']}/teams", json={"name": "Speaker Team"}
-    ).json()
-
-    first = client.post(
-        f"/api/v1/teams/{team['id']}/members",
-        json={"debater_id": debater_1["id"], "speaker_position": 1},
-    )
-    assert first.status_code == 201
-
-    second = client.post(
-        f"/api/v1/teams/{team['id']}/members",
-        json={"debater_id": debater_2["id"], "speaker_position": 1},
     )
     assert second.status_code == 409
 
@@ -296,15 +273,15 @@ def _build_debate_scaffold(client: TestClient) -> dict:
         client.post("/api/v1/debaters", json={"name": f"Opp Speaker {i}"}).json()
         for i in range(1, 4)
     ]
-    for i, debater in enumerate(prop_debaters, start=1):
+    for debater in prop_debaters:
         client.post(
             f"/api/v1/teams/{prop_team['id']}/members",
-            json={"debater_id": debater["id"], "speaker_position": i},
+            json={"debater_id": debater["id"]},
         )
-    for i, debater in enumerate(opp_debaters, start=1):
+    for debater in opp_debaters:
         client.post(
             f"/api/v1/teams/{opp_team['id']}/members",
-            json={"debater_id": debater["id"], "speaker_position": i},
+            json={"debater_id": debater["id"]},
         )
 
     round_ = client.post(

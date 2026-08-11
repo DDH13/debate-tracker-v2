@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     version: str = "0.1.0"
     database_url: str = "sqlite://"
     sql_echo: bool = False
-    seed_on_startup: bool = True
+    seed_on_startup: bool = False
 
 
 settings = Settings()

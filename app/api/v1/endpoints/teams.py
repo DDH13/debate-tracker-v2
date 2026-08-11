@@ -99,7 +99,7 @@ def add_team_member(
         session.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Debater already on this team or speaker position already taken",
+            detail="Debater already on this team",
         ) from exc
     session.refresh(member)
     return member

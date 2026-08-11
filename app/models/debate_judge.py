@@ -9,6 +9,7 @@ if TYPE_CHECKING:
 
 class DebateJudgeBase(SQLModel):
     is_chair: bool = False
+    is_trainee: bool = False
 
 
 class DebateJudge(DebateJudgeBase, table=True):
@@ -25,6 +26,7 @@ class DebateJudge(DebateJudgeBase, table=True):
 class DebateJudgeCreate(SQLModel):
     judge_id: int
     is_chair: bool = False
+    is_trainee: bool = False
 
 
 class DebateJudgePublic(DebateJudgeBase):

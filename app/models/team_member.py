@@ -7,15 +7,8 @@ if TYPE_CHECKING:
     from app.models.team import Team
 
 
-class TeamMemberBase(SQLModel):
-    speaker_position: int | None = None
-
-
-class TeamMember(TeamMemberBase, table=True):
-    __table_args__ = (
-        UniqueConstraint("team_id", "debater_id"),
-        UniqueConstraint("team_id", "speaker_position"),
-    )
+class TeamMember(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("team_id", "debater_id"),)
 
     id: int | None = Field(default=None, primary_key=True)
     team_id: int = Field(foreign_key="team.id")
@@ -27,10 +20,9 @@ class TeamMember(TeamMemberBase, table=True):
 
 class TeamMemberCreate(SQLModel):
     debater_id: int
-    speaker_position: int | None = None
 
 
-class TeamMemberPublic(TeamMemberBase):
+class TeamMemberPublic(SQLModel):
     id: int
     team_id: int
     debater_id: int
