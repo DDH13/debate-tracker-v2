@@ -21,6 +21,8 @@ class Ballot(BallotBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     debate_id: int = Field(foreign_key="debate.id")
     judge_id: int = Field(foreign_key="judge.id")
+    discarded: bool = False
+    forfeit: bool = False
 
     debate: "Debate" = Relationship(back_populates="ballots")
     judge: "Judge" = Relationship(back_populates="ballots")
@@ -50,3 +52,5 @@ class BallotPublicWithScores(BallotPublic):
 
 class BallotUpdate(SQLModel):
     winner: Side | None = None
+    discarded: bool | None = None
+    forfeit: bool | None = None

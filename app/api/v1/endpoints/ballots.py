@@ -99,8 +99,9 @@ def _set_ballot_scores(
 
 def _recompute_debate_winner(session: SessionDep, debate: Debate) -> None:
     ballots = session.exec(select(Ballot).where(Ballot.debate_id == debate.id)).all()
-    prop_votes = sum(1 for b in ballots if b.winner == Side.PROP)
-    opp_votes = sum(1 for b in ballots if b.winner == Side.OPP)
+    counted = [b for b in ballots if not b.discarded]
+    prop_votes = sum(1 for b in counted if b.winner == Side.PROP)
+    opp_votes = sum(1 for b in counted if b.winner == Side.OPP)
     if prop_votes > opp_votes:
         debate.winner = Side.PROP
         session.add(debate)

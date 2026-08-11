@@ -120,7 +120,7 @@ def test_institution_debater_team_roster_flow(client: TestClient) -> None:
     ).json()
     debater = client.post(
         "/api/v1/debaters",
-        json={"name": "Riley Roster", "institution_id": institution["id"]},
+        json={"full_name": "Riley Roster", "institution_id": institution["id"]},
     ).json()
     tournament = client.post(
         "/api/v1/tournaments", json={"name": "Roster Cup", "slug": "roster-cup"}
@@ -146,7 +146,7 @@ def test_debater_cross_tournament_history(client: TestClient) -> None:
     ).json()
     debater = client.post(
         "/api/v1/debaters",
-        json={"name": "Casey Cross", "institution_id": institution["id"]},
+        json={"full_name": "Casey Cross", "institution_id": institution["id"]},
     ).json()
 
     tournament_1 = client.post(
@@ -180,7 +180,7 @@ def test_debater_cross_tournament_history(client: TestClient) -> None:
 
 
 def test_duplicate_team_member_debater_is_409(client: TestClient) -> None:
-    debater = client.post("/api/v1/debaters", json={"name": "Dup Debater"}).json()
+    debater = client.post("/api/v1/debaters", json={"full_name": "Dup Debater"}).json()
     tournament = client.post(
         "/api/v1/tournaments", json={"name": "Dup Tournament", "slug": "dup-tournament"}
     ).json()
@@ -201,7 +201,7 @@ def test_duplicate_team_member_debater_is_409(client: TestClient) -> None:
 
 def test_create_debater_with_missing_institution_is_404(client: TestClient) -> None:
     response = client.post(
-        "/api/v1/debaters", json={"name": "Ghost Debater", "institution_id": 99999}
+        "/api/v1/debaters", json={"full_name": "Ghost Debater", "institution_id": 99999}
     )
     assert response.status_code == 404
 
@@ -219,7 +219,7 @@ def test_delete_institution_referenced_by_team_is_409_then_204(client: TestClien
     ).json()
     debater = client.post(
         "/api/v1/debaters",
-        json={"name": "Delete Uni Debater", "institution_id": institution["id"]},
+        json={"full_name": "Delete Uni Debater", "institution_id": institution["id"]},
     ).json()
 
     blocked = client.delete(f"/api/v1/institutions/{institution['id']}")
@@ -233,7 +233,7 @@ def test_delete_institution_referenced_by_team_is_409_then_204(client: TestClien
 
 
 def test_delete_debater_on_team_clears_roster(client: TestClient) -> None:
-    debater = client.post("/api/v1/debaters", json={"name": "Removable Debater"}).json()
+    debater = client.post("/api/v1/debaters", json={"full_name": "Removable Debater"}).json()
     tournament = client.post(
         "/api/v1/tournaments", json={"name": "Remove Tournament", "slug": "remove-tournament"}
     ).json()
@@ -266,11 +266,11 @@ def _build_debate_scaffold(client: TestClient) -> dict:
     ).json()
 
     prop_debaters = [
-        client.post("/api/v1/debaters", json={"name": f"Prop Speaker {i}"}).json()
+        client.post("/api/v1/debaters", json={"full_name": f"Prop Speaker {i}"}).json()
         for i in range(1, 4)
     ]
     opp_debaters = [
-        client.post("/api/v1/debaters", json={"name": f"Opp Speaker {i}"}).json()
+        client.post("/api/v1/debaters", json={"full_name": f"Opp Speaker {i}"}).json()
         for i in range(1, 4)
     ]
     for debater in prop_debaters:
@@ -293,7 +293,7 @@ def _build_debate_scaffold(client: TestClient) -> dict:
     ).json()
 
     judges = [
-        client.post("/api/v1/judges", json={"name": f"Judge {i}"}).json() for i in range(1, 4)
+        client.post("/api/v1/judges", json={"full_name": f"Judge {i}"}).json() for i in range(1, 4)
     ]
     for judge in judges:
         resp = client.post(
@@ -317,23 +317,94 @@ def _full_score_sheet(
     prop_debaters: list[dict], opp_debaters: list[dict], prop_reply_idx: int = 0, opp_reply_idx: int = 1
 ) -> list[dict]:
     return [
-        {"debater_id": prop_debaters[0]["id"], "side": "prop", "position": 1, "score": 76.0},
-        {"debater_id": prop_debaters[1]["id"], "side": "prop", "position": 2, "score": 74.5},
-        {"debater_id": prop_debaters[2]["id"], "side": "prop", "position": 3, "score": 75.0},
+        {"debater_id": prop_debaters[0]["id"], "side": "prop", "position": 1, "final_score": 76.0},
+        {"debater_id": prop_debaters[1]["id"], "side": "prop", "position": 2, "final_score": 74.5},
+        {"debater_id": prop_debaters[2]["id"], "side": "prop", "position": 3, "final_score": 75.0},
         {
             "debater_id": prop_debaters[prop_reply_idx]["id"],
             "side": "prop",
             "position": 4,
-            "score": 38.0,
+            "final_score": 38.0,
         },
-        {"debater_id": opp_debaters[0]["id"], "side": "opp", "position": 1, "score": 75.5},
-        {"debater_id": opp_debaters[1]["id"], "side": "opp", "position": 2, "score": 75.0},
-        {"debater_id": opp_debaters[2]["id"], "side": "opp", "position": 3, "score": 74.0},
+        {"debater_id": opp_debaters[0]["id"], "side": "opp", "position": 1, "final_score": 75.5},
+        {"debater_id": opp_debaters[1]["id"], "side": "opp", "position": 2, "final_score": 75.0},
+        {"debater_id": opp_debaters[2]["id"], "side": "opp", "position": 3, "final_score": 74.0},
         {
             "debater_id": opp_debaters[opp_reply_idx]["id"],
             "side": "opp",
             "position": 4,
-            "score": 37.5,
+            "final_score": 37.5,
+        },
+    ]
+
+
+def _full_score_sheet_with_categories(
+    prop_debaters: list[dict], opp_debaters: list[dict], prop_reply_idx: int = 0, opp_reply_idx: int = 1
+) -> list[dict]:
+    return [
+        {
+            "debater_id": prop_debaters[0]["id"],
+            "side": "prop",
+            "position": 1,
+            "content": 30.5,
+            "style": 30.5,
+            "strategy": 15.0,
+        },
+        {
+            "debater_id": prop_debaters[1]["id"],
+            "side": "prop",
+            "position": 2,
+            "content": 30.0,
+            "style": 29.5,
+            "strategy": 15.0,
+        },
+        {
+            "debater_id": prop_debaters[2]["id"],
+            "side": "prop",
+            "position": 3,
+            "content": 30.0,
+            "style": 30.0,
+            "strategy": 15.0,
+        },
+        {
+            "debater_id": prop_debaters[prop_reply_idx]["id"],
+            "side": "prop",
+            "position": 4,
+            "content": 15.0,
+            "style": 15.0,
+            "strategy": 8.0,
+        },
+        {
+            "debater_id": opp_debaters[0]["id"],
+            "side": "opp",
+            "position": 1,
+            "content": 30.0,
+            "style": 30.5,
+            "strategy": 15.0,
+        },
+        {
+            "debater_id": opp_debaters[1]["id"],
+            "side": "opp",
+            "position": 2,
+            "content": 30.0,
+            "style": 30.0,
+            "strategy": 15.0,
+        },
+        {
+            "debater_id": opp_debaters[2]["id"],
+            "side": "opp",
+            "position": 3,
+            "content": 29.5,
+            "style": 29.5,
+            "strategy": 15.0,
+        },
+        {
+            "debater_id": opp_debaters[opp_reply_idx]["id"],
+            "side": "opp",
+            "position": 4,
+            "content": 15.0,
+            "style": 15.0,
+            "strategy": 7.5,
         },
     ]
 
@@ -405,14 +476,14 @@ def test_ballot_position_collision_is_409(client: TestClient) -> None:
     opp_debaters = scaffold["opp_debaters"]
 
     scores = [
-        {"debater_id": prop_debaters[0]["id"], "side": "prop", "position": 1, "score": 76.0},
-        {"debater_id": prop_debaters[1]["id"], "side": "prop", "position": 1, "score": 74.5},
-        {"debater_id": prop_debaters[2]["id"], "side": "prop", "position": 3, "score": 75.0},
-        {"debater_id": opp_debaters[0]["id"], "side": "opp", "position": 1, "score": 75.5},
-        {"debater_id": opp_debaters[1]["id"], "side": "opp", "position": 2, "score": 75.0},
-        {"debater_id": opp_debaters[2]["id"], "side": "opp", "position": 3, "score": 74.0},
-        {"debater_id": opp_debaters[0]["id"], "side": "opp", "position": 4, "score": 37.5},
-        {"debater_id": prop_debaters[0]["id"], "side": "prop", "position": 4, "score": 38.0},
+        {"debater_id": prop_debaters[0]["id"], "side": "prop", "position": 1, "final_score": 76.0},
+        {"debater_id": prop_debaters[1]["id"], "side": "prop", "position": 1, "final_score": 74.5},
+        {"debater_id": prop_debaters[2]["id"], "side": "prop", "position": 3, "final_score": 75.0},
+        {"debater_id": opp_debaters[0]["id"], "side": "opp", "position": 1, "final_score": 75.5},
+        {"debater_id": opp_debaters[1]["id"], "side": "opp", "position": 2, "final_score": 75.0},
+        {"debater_id": opp_debaters[2]["id"], "side": "opp", "position": 3, "final_score": 74.0},
+        {"debater_id": opp_debaters[0]["id"], "side": "opp", "position": 4, "final_score": 37.5},
+        {"debater_id": prop_debaters[0]["id"], "side": "prop", "position": 4, "final_score": 38.0},
     ]
     resp = client.post(
         f"/api/v1/debates/{debate_id}/ballots",
@@ -424,7 +495,7 @@ def test_ballot_position_collision_is_409(client: TestClient) -> None:
 def test_ballot_from_judge_not_on_panel_is_422(client: TestClient) -> None:
     scaffold = _build_debate_scaffold(client)
     debate_id = scaffold["debate"]["id"]
-    outsider = client.post("/api/v1/judges", json={"name": "Outsider Judge"}).json()
+    outsider = client.post("/api/v1/judges", json={"full_name": "Outsider Judge"}).json()
 
     resp = client.post(
         f"/api/v1/debates/{debate_id}/ballots",
@@ -445,7 +516,7 @@ def test_score_debater_on_wrong_side_is_422(client: TestClient) -> None:
         "debater_id": opp_debaters[0]["id"],
         "side": "prop",
         "position": 1,
-        "score": 76.0,
+        "final_score": 76.0,
     }
     resp = client.post(
         f"/api/v1/debates/{debate_id}/ballots",
@@ -462,7 +533,7 @@ def test_half_point_score_violation_is_422(client: TestClient) -> None:
     opp_debaters = scaffold["opp_debaters"]
 
     scores = _full_score_sheet(prop_debaters, opp_debaters)
-    scores[0]["score"] = 75.3
+    scores[0]["final_score"] = 75.3
     resp = client.post(
         f"/api/v1/debates/{debate_id}/ballots",
         json={"judge_id": judge["id"], "winner": "prop", "scores": scores},
@@ -550,10 +621,127 @@ def test_replace_ballot_scores(client: TestClient) -> None:
     ).json()
 
     new_scores = _full_score_sheet(prop_debaters, opp_debaters)
-    new_scores[0]["score"] = 77.0
+    new_scores[0]["final_score"] = 77.0
     resp = client.put(f"/api/v1/ballots/{ballot['id']}/scores", json=new_scores)
     assert resp.status_code == 200
     updated = next(
         s for s in resp.json()["scores"] if s["debater_id"] == prop_debaters[0]["id"] and s["position"] == 1
     )
-    assert updated["score"] == 77.0
+    assert updated["final_score"] == 77.0
+
+
+def test_ballot_with_category_scores_derives_final_score(client: TestClient) -> None:
+    scaffold = _build_debate_scaffold(client)
+    debate_id = scaffold["debate"]["id"]
+    judge = scaffold["judges"][0]
+    prop_debaters = scaffold["prop_debaters"]
+    opp_debaters = scaffold["opp_debaters"]
+
+    scores = _full_score_sheet_with_categories(prop_debaters, opp_debaters)
+    resp = client.post(
+        f"/api/v1/debates/{debate_id}/ballots",
+        json={"judge_id": judge["id"], "winner": "prop", "scores": scores},
+    )
+    assert resp.status_code == 201, resp.text
+    rows = resp.json()["scores"]
+    assert len(rows) == 8
+    for row in rows:
+        assert row["final_score"] == row["content"] + row["style"] + row["strategy"]
+
+
+def test_category_scores_inconsistent_with_final_score_is_422(client: TestClient) -> None:
+    scaffold = _build_debate_scaffold(client)
+    debate_id = scaffold["debate"]["id"]
+    judge = scaffold["judges"][0]
+    prop_debaters = scaffold["prop_debaters"]
+    opp_debaters = scaffold["opp_debaters"]
+
+    scores = _full_score_sheet_with_categories(prop_debaters, opp_debaters)
+    scores[0]["final_score"] = 75.0
+    resp = client.post(
+        f"/api/v1/debates/{debate_id}/ballots",
+        json={"judge_id": judge["id"], "winner": "prop", "scores": scores},
+    )
+    assert resp.status_code == 422
+
+
+def test_partial_category_scores_is_422(client: TestClient) -> None:
+    scaffold = _build_debate_scaffold(client)
+    debate_id = scaffold["debate"]["id"]
+    judge = scaffold["judges"][0]
+    prop_debaters = scaffold["prop_debaters"]
+    opp_debaters = scaffold["opp_debaters"]
+
+    scores = _full_score_sheet_with_categories(prop_debaters, opp_debaters)
+    del scores[0]["style"]
+    del scores[0]["strategy"]
+    resp = client.post(
+        f"/api/v1/debates/{debate_id}/ballots",
+        json={"judge_id": judge["id"], "winner": "prop", "scores": scores},
+    )
+    assert resp.status_code == 422
+
+
+def test_category_score_over_cap_is_422(client: TestClient) -> None:
+    scaffold = _build_debate_scaffold(client)
+    debate_id = scaffold["debate"]["id"]
+    judge = scaffold["judges"][0]
+    prop_debaters = scaffold["prop_debaters"]
+    opp_debaters = scaffold["opp_debaters"]
+
+    scores = _full_score_sheet_with_categories(prop_debaters, opp_debaters)
+    scores[0]["strategy"] = 25.0
+    resp = client.post(
+        f"/api/v1/debates/{debate_id}/ballots",
+        json={"judge_id": judge["id"], "winner": "prop", "scores": scores},
+    )
+    assert resp.status_code == 422
+
+
+def test_category_half_point_violation_is_422(client: TestClient) -> None:
+    scaffold = _build_debate_scaffold(client)
+    debate_id = scaffold["debate"]["id"]
+    judge = scaffold["judges"][0]
+    prop_debaters = scaffold["prop_debaters"]
+    opp_debaters = scaffold["opp_debaters"]
+
+    scores = _full_score_sheet_with_categories(prop_debaters, opp_debaters)
+    scores[0]["content"] = 30.3
+    resp = client.post(
+        f"/api/v1/debates/{debate_id}/ballots",
+        json={"judge_id": judge["id"], "winner": "prop", "scores": scores},
+    )
+    assert resp.status_code == 422
+
+
+def test_replace_ballot_scores_with_categories(client: TestClient) -> None:
+    scaffold = _build_debate_scaffold(client)
+    debate_id = scaffold["debate"]["id"]
+    judge = scaffold["judges"][0]
+    prop_debaters = scaffold["prop_debaters"]
+    opp_debaters = scaffold["opp_debaters"]
+
+    ballot = client.post(
+        f"/api/v1/debates/{debate_id}/ballots",
+        json={
+            "judge_id": judge["id"],
+            "winner": "prop",
+            "scores": _full_score_sheet(prop_debaters, opp_debaters),
+        },
+    ).json()
+
+    category_scores = _full_score_sheet_with_categories(prop_debaters, opp_debaters)
+    resp = client.put(f"/api/v1/ballots/{ballot['id']}/scores", json=category_scores)
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()["scores"]
+    for row in rows:
+        assert row["content"] is not None
+        assert row["final_score"] == row["content"] + row["style"] + row["strategy"]
+
+    totals_only = _full_score_sheet(prop_debaters, opp_debaters)
+    resp = client.put(f"/api/v1/ballots/{ballot['id']}/scores", json=totals_only)
+    assert resp.status_code == 200, resp.text
+    for row in resp.json()["scores"]:
+        assert row["content"] is None
+        assert row["style"] is None
+        assert row["strategy"] is None

@@ -44,19 +44,33 @@ def seed(session: Session) -> None:
     session.flush()
 
     debaters = [
-        Debater(name="Alice Adams", email="alice@uni-a.edu", institution_id=institutions[0].id),
-        Debater(name="Andrew Ali", institution_id=institutions[0].id),
-        Debater(name="Amy Ito", institution_id=institutions[0].id),
-        Debater(name="Bob Brooks", email="bob@uni-b.edu", institution_id=institutions[1].id),
-        Debater(name="Bella Byrne", institution_id=institutions[1].id),
-        Debater(name="Ben Barnes", institution_id=institutions[1].id),
-        Debater(name="Cara Chen", institution_id=institutions[2].id),
-        Debater(name="Carl Cole", institution_id=institutions[2].id),
-        Debater(name="Cathy Cruz", institution_id=institutions[2].id),
-        Debater(name="Dana Diaz", institution_id=institutions[3].id),
-        Debater(name="Dave Dunn", institution_id=institutions[3].id),
         Debater(
-            name="Sam Sharma",
+            full_name="Alice Adams",
+            first_name="Alice",
+            last_name="Adams",
+            email="alice@uni-a.edu",
+            institution_id=institutions[0].id,
+        ),
+        Debater(full_name="Andrew Ali", first_name="Andrew", last_name="Ali", institution_id=institutions[0].id),
+        Debater(full_name="Amy Ito", first_name="Amy", last_name="Ito", institution_id=institutions[0].id),
+        Debater(
+            full_name="Bob Brooks",
+            first_name="Bob",
+            last_name="Brooks",
+            email="bob@uni-b.edu",
+            institution_id=institutions[1].id,
+        ),
+        Debater(full_name="Bella Byrne", first_name="Bella", last_name="Byrne", institution_id=institutions[1].id),
+        Debater(full_name="Ben Barnes", first_name="Ben", last_name="Barnes", institution_id=institutions[1].id),
+        Debater(full_name="Cara Chen", first_name="Cara", last_name="Chen", institution_id=institutions[2].id),
+        Debater(full_name="Carl Cole", first_name="Carl", last_name="Cole", institution_id=institutions[2].id),
+        Debater(full_name="Cathy Cruz", first_name="Cathy", last_name="Cruz", institution_id=institutions[2].id),
+        Debater(full_name="Dana Diaz", first_name="Dana", last_name="Diaz", institution_id=institutions[3].id),
+        Debater(full_name="Dave Dunn", first_name="Dave", last_name="Dunn", institution_id=institutions[3].id),
+        Debater(
+            full_name="Sam Sharma",
+            first_name="Sam",
+            last_name="Sharma",
             email="sam.sharma@example.com",
             institution_id=institutions[3].id,
         ),
@@ -64,9 +78,21 @@ def seed(session: Session) -> None:
     session.add_all(debaters)
 
     judges = [
-        Judge(name="Jordan Park", email="jordan@judges.org", institution_id=institutions[1].id),
-        Judge(name="Sam Sharma", email="sam.sharma@example.com"),
-        Judge(name="Priya Patel", email="priya@judges.org", institution_id=institutions[2].id),
+        Judge(
+            full_name="Jordan Park",
+            first_name="Jordan",
+            last_name="Park",
+            email="jordan@judges.org",
+            institution_id=institutions[1].id,
+        ),
+        Judge(full_name="Sam Sharma", first_name="Sam", last_name="Sharma", email="sam.sharma@example.com"),
+        Judge(
+            full_name="Priya Patel",
+            first_name="Priya",
+            last_name="Patel",
+            email="priya@judges.org",
+            institution_id=institutions[2].id,
+        ),
     ]
     session.add_all(judges)
     session.flush()
@@ -140,6 +166,9 @@ def seed(session: Session) -> None:
                     debater_id=debaters[0].id,
                     side=Side.PROP,
                     position=SpeakerPosition.FIRST,
+                    content=30.5,
+                    style=30.5,
+                    strategy=15.0,
                     final_score=76.0,
                 ),
                 SpeakerScore(
@@ -147,6 +176,9 @@ def seed(session: Session) -> None:
                     debater_id=debaters[1].id,
                     side=Side.PROP,
                     position=SpeakerPosition.SECOND,
+                    content=30.0,
+                    style=29.5,
+                    strategy=15.0,
                     final_score=74.5,
                 ),
                 SpeakerScore(
@@ -154,6 +186,9 @@ def seed(session: Session) -> None:
                     debater_id=debaters[2].id,
                     side=Side.PROP,
                     position=SpeakerPosition.THIRD,
+                    content=30.0,
+                    style=30.0,
+                    strategy=15.0,
                     final_score=75.0,
                 ),
                 SpeakerScore(
@@ -161,6 +196,9 @@ def seed(session: Session) -> None:
                     debater_id=debaters[0].id,
                     side=Side.PROP,
                     position=SpeakerPosition.REPLY,
+                    content=15.0,
+                    style=15.0,
+                    strategy=8.0,
                     final_score=38.0,
                 ),
                 SpeakerScore(
@@ -168,6 +206,9 @@ def seed(session: Session) -> None:
                     debater_id=debaters[3].id,
                     side=Side.OPP,
                     position=SpeakerPosition.FIRST,
+                    content=30.0,
+                    style=30.5,
+                    strategy=15.0,
                     final_score=75.5,
                 ),
                 SpeakerScore(
@@ -175,6 +216,9 @@ def seed(session: Session) -> None:
                     debater_id=debaters[4].id,
                     side=Side.OPP,
                     position=SpeakerPosition.SECOND,
+                    content=30.0,
+                    style=30.0,
+                    strategy=15.0,
                     final_score=75.0,
                 ),
                 SpeakerScore(
@@ -182,6 +226,9 @@ def seed(session: Session) -> None:
                     debater_id=debaters[5].id,
                     side=Side.OPP,
                     position=SpeakerPosition.THIRD,
+                    content=29.5,
+                    style=29.5,
+                    strategy=15.0,
                     final_score=74.0,
                 ),
                 SpeakerScore(
@@ -189,6 +236,9 @@ def seed(session: Session) -> None:
                     debater_id=debaters[4].id,
                     side=Side.OPP,
                     position=SpeakerPosition.REPLY,
+                    content=15.0,
+                    style=15.0,
+                    strategy=7.5,
                     final_score=37.5,
                 ),
             ]
