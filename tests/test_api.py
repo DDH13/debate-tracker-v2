@@ -1,5 +1,11 @@
 from fastapi.testclient import TestClient
 
+from tests.helpers import (
+    _build_debate_scaffold,
+    _full_score_sheet,
+    _full_score_sheet_with_categories,
+)
+
 
 def test_health(client: TestClient) -> None:
     response = client.get("/health")
@@ -252,161 +258,6 @@ def test_delete_debater_on_team_clears_roster(client: TestClient) -> None:
 def test_get_missing_institution_is_404(client: TestClient) -> None:
     response = client.get("/api/v1/institutions/99999")
     assert response.status_code == 404
-
-
-def _build_debate_scaffold(client: TestClient) -> dict:
-    tournament = client.post(
-        "/api/v1/tournaments", json={"name": "Ballot Cup", "slug": "ballot-cup"}
-    ).json()
-    prop_team = client.post(
-        f"/api/v1/tournaments/{tournament['id']}/teams", json={"name": "Prop Team"}
-    ).json()
-    opp_team = client.post(
-        f"/api/v1/tournaments/{tournament['id']}/teams", json={"name": "Opp Team"}
-    ).json()
-
-    prop_debaters = [
-        client.post("/api/v1/debaters", json={"full_name": f"Prop Speaker {i}"}).json()
-        for i in range(1, 4)
-    ]
-    opp_debaters = [
-        client.post("/api/v1/debaters", json={"full_name": f"Opp Speaker {i}"}).json()
-        for i in range(1, 4)
-    ]
-    for debater in prop_debaters:
-        client.post(
-            f"/api/v1/teams/{prop_team['id']}/members",
-            json={"debater_id": debater["id"]},
-        )
-    for debater in opp_debaters:
-        client.post(
-            f"/api/v1/teams/{opp_team['id']}/members",
-            json={"debater_id": debater["id"]},
-        )
-
-    round_ = client.post(
-        f"/api/v1/tournaments/{tournament['id']}/rounds", json={"seq": 1}
-    ).json()
-    debate = client.post(
-        f"/api/v1/rounds/{round_['id']}/debates",
-        json={"prop_team_id": prop_team["id"], "opp_team_id": opp_team["id"]},
-    ).json()
-
-    judges = [
-        client.post("/api/v1/judges", json={"full_name": f"Judge {i}"}).json() for i in range(1, 4)
-    ]
-    for judge in judges:
-        resp = client.post(
-            f"/api/v1/debates/{debate['id']}/judges", json={"judge_id": judge["id"]}
-        )
-        assert resp.status_code == 201
-
-    return {
-        "tournament": tournament,
-        "prop_team": prop_team,
-        "opp_team": opp_team,
-        "prop_debaters": prop_debaters,
-        "opp_debaters": opp_debaters,
-        "round": round_,
-        "debate": debate,
-        "judges": judges,
-    }
-
-
-def _full_score_sheet(
-    prop_debaters: list[dict], opp_debaters: list[dict], prop_reply_idx: int = 0, opp_reply_idx: int = 1
-) -> list[dict]:
-    return [
-        {"debater_id": prop_debaters[0]["id"], "side": "prop", "position": 1, "final_score": 76.0},
-        {"debater_id": prop_debaters[1]["id"], "side": "prop", "position": 2, "final_score": 74.5},
-        {"debater_id": prop_debaters[2]["id"], "side": "prop", "position": 3, "final_score": 75.0},
-        {
-            "debater_id": prop_debaters[prop_reply_idx]["id"],
-            "side": "prop",
-            "position": 4,
-            "final_score": 38.0,
-        },
-        {"debater_id": opp_debaters[0]["id"], "side": "opp", "position": 1, "final_score": 75.5},
-        {"debater_id": opp_debaters[1]["id"], "side": "opp", "position": 2, "final_score": 75.0},
-        {"debater_id": opp_debaters[2]["id"], "side": "opp", "position": 3, "final_score": 74.0},
-        {
-            "debater_id": opp_debaters[opp_reply_idx]["id"],
-            "side": "opp",
-            "position": 4,
-            "final_score": 37.5,
-        },
-    ]
-
-
-def _full_score_sheet_with_categories(
-    prop_debaters: list[dict], opp_debaters: list[dict], prop_reply_idx: int = 0, opp_reply_idx: int = 1
-) -> list[dict]:
-    return [
-        {
-            "debater_id": prop_debaters[0]["id"],
-            "side": "prop",
-            "position": 1,
-            "content": 30.5,
-            "style": 30.5,
-            "strategy": 15.0,
-        },
-        {
-            "debater_id": prop_debaters[1]["id"],
-            "side": "prop",
-            "position": 2,
-            "content": 30.0,
-            "style": 29.5,
-            "strategy": 15.0,
-        },
-        {
-            "debater_id": prop_debaters[2]["id"],
-            "side": "prop",
-            "position": 3,
-            "content": 30.0,
-            "style": 30.0,
-            "strategy": 15.0,
-        },
-        {
-            "debater_id": prop_debaters[prop_reply_idx]["id"],
-            "side": "prop",
-            "position": 4,
-            "content": 15.0,
-            "style": 15.0,
-            "strategy": 8.0,
-        },
-        {
-            "debater_id": opp_debaters[0]["id"],
-            "side": "opp",
-            "position": 1,
-            "content": 30.0,
-            "style": 30.5,
-            "strategy": 15.0,
-        },
-        {
-            "debater_id": opp_debaters[1]["id"],
-            "side": "opp",
-            "position": 2,
-            "content": 30.0,
-            "style": 30.0,
-            "strategy": 15.0,
-        },
-        {
-            "debater_id": opp_debaters[2]["id"],
-            "side": "opp",
-            "position": 3,
-            "content": 29.5,
-            "style": 29.5,
-            "strategy": 15.0,
-        },
-        {
-            "debater_id": opp_debaters[opp_reply_idx]["id"],
-            "side": "opp",
-            "position": 4,
-            "content": 15.0,
-            "style": 15.0,
-            "strategy": 7.5,
-        },
-    ]
 
 
 def test_ballot_happy_path_with_split_and_result(client: TestClient) -> None:

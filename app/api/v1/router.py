@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     judges,
     motions,
     rounds,
+    stats,
     teams,
     tournaments,
 )
@@ -22,3 +23,4 @@ api_router.include_router(rounds.router)
 api_router.include_router(motions.router)
 api_router.include_router(debates.router)
 api_router.include_router(ballots.router)
+api_router.include_router(stats.router)

@@ -8,6 +8,7 @@ from app.models.ballot import (
 from app.models.debate import Debate, DebateCreate, DebatePublic, DebateUpdate
 from app.models.debate_judge import DebateJudge, DebateJudgeCreate, DebateJudgePublic
 from app.models.debater import Debater, DebaterCreate, DebaterPublic, DebaterUpdate
+from app.models.debater_profile import DebaterProfile, DebaterProfilePublic
 from app.models.enums import Side, SpeakerPosition
 from app.models.institution import (
     Institution,
@@ -16,6 +17,7 @@ from app.models.institution import (
     InstitutionUpdate,
 )
 from app.models.judge import Judge, JudgeCreate, JudgePublic, JudgeUpdate
+from app.models.judge_profile import JudgeProfile, JudgeProfilePublic
 from app.models.motion import Motion, MotionCreate, MotionPublic, MotionUpdate
 from app.models.round import Round, RoundCreate, RoundPublic, RoundUpdate
 from app.models.speaker_score import SpeakerScore, SpeakerScoreCreate, SpeakerScorePublic
@@ -45,6 +47,8 @@ __all__ = [
     "DebaterCreate",
     "DebaterPublic",
     "DebaterUpdate",
+    "DebaterProfile",
+    "DebaterProfilePublic",
     "Side",
     "SpeakerPosition",
     "Institution",
@@ -55,6 +59,8 @@ __all__ = [
     "JudgeCreate",
     "JudgePublic",
     "JudgeUpdate",
+    "JudgeProfile",
+    "JudgeProfilePublic",
     "Motion",
     "MotionCreate",
     "MotionPublic",
