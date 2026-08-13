@@ -154,7 +154,10 @@ CRITERION_ANALYSIS = {"id": 4, "url": u(f"/api/v1/tournaments/{SLUG}/score-crite
 CRITERION_DELIVERY = {"id": 5, "url": u(f"/api/v1/tournaments/{SLUG}/score-criteria/5"), "name": "Delivery"}
 
 
-def _motion(id_: int, seq: int, text: str) -> dict:
+def _motion(id_: int, round_url: str, text: str) -> dict:
+    """Matches the real `/api/v1/tournaments/{slug}/motions` payload shape: motions are a
+    separate resource that link back to rounds by URL (the round-list endpoint itself never
+    embeds motions, only `motions_released`/`motions_status` flags)."""
     return {
         "id": id_,
         "url": u(f"/api/v1/tournaments/{SLUG}/motions/{id_}"),
@@ -162,7 +165,7 @@ def _motion(id_: int, seq: int, text: str) -> dict:
         "reference": text[:20],
         "info_slide": "",
         "info_slide_plain": "",
-        "seq": seq,
+        "rounds": [{"round": round_url, "seq": 1}],
     }
 
 
@@ -175,7 +178,6 @@ ROUND1 = {
     "stage": "P",
     "completed": True,
     "starts_at": "2024-06-01T09:00:00Z",
-    "motions": [_motion(1, 1, "This House Would ban social media for minors.")],
 }
 ROUND2 = {
     "id": 2,
@@ -186,12 +188,14 @@ ROUND2 = {
     "stage": "P",
     "completed": False,
     "starts_at": None,
-    "motions": [
-        _motion(2, 1, "Motion B"),
-        _motion(3, 2, "Motion C"),
-        _motion(4, 3, "Motion D"),
-    ],
 }
+
+MOTIONS = [
+    _motion(1, ROUND1["url"], "This House Would ban social media for minors."),
+    _motion(2, ROUND2["url"], "Motion B"),
+    _motion(3, ROUND2["url"], "Motion C"),
+    _motion(4, ROUND2["url"], "Motion D"),
+]
 
 PAIRING_R1 = {
     "id": 1,
@@ -373,6 +377,7 @@ def register_routes(*, institutions_paginated: bool = True, ballots: bool = True
         )
     )
     respx.get(u(f"/api/v1/tournaments/{SLUG}/rounds")).mock(return_value=httpx.Response(200, json=[ROUND1, ROUND2]))
+    respx.get(u(f"/api/v1/tournaments/{SLUG}/motions")).mock(return_value=httpx.Response(200, json=MOTIONS))
     respx.get(u(f"/api/v1/tournaments/{SLUG}/rounds/1/pairings")).mock(
         return_value=httpx.Response(200, json=[PAIRING_R1])
     )
@@ -539,7 +544,7 @@ def test_get_list_handles_both_pagination_shapes() -> None:
     assert [item["id"] for item in paginated] == [1, 2, 3]
 
 
-def _register_minimal(*, teams=None, institutions=None, adjudicators=None, rounds=None):
+def _register_minimal(*, teams=None, institutions=None, adjudicators=None, rounds=None, motions=None):
     """Registers only the routes exercised by `_run_import` for a slug with no debates,
     so individual diagnostics can be tested without the full happy-path fixture set."""
     respx.get(u(f"/api/v1/tournaments/{SLUG}")).mock(return_value=httpx.Response(200, json=TOURNAMENT))
@@ -551,6 +556,7 @@ def _register_minimal(*, teams=None, institutions=None, adjudicators=None, round
     respx.get(u(f"/api/v1/tournaments/{SLUG}/venues")).mock(return_value=httpx.Response(200, json=[]))
     respx.get(u(f"/api/v1/tournaments/{SLUG}/score-criteria")).mock(return_value=httpx.Response(200, json=[]))
     respx.get(u(f"/api/v1/tournaments/{SLUG}/rounds")).mock(return_value=httpx.Response(200, json=rounds or []))
+    respx.get(u(f"/api/v1/tournaments/{SLUG}/motions")).mock(return_value=httpx.Response(200, json=motions or []))
     for round_data in rounds or []:
         respx.get(u(f"/api/v1/tournaments/{SLUG}/rounds/{round_data['seq']}/pairings")).mock(
             return_value=httpx.Response(200, json=[])
@@ -624,28 +630,27 @@ def test_unresolved_institution_is_reported(client: TestClient, session: Session
 def test_round_without_motion_is_reported(client: TestClient, session: Session) -> None:
     round_with_motion = {
         "id": 601,
-        "url": u(f"/api/v1/tournaments/{SLUG}/rounds/601"),
+        "url": u(f"/api/v1/tournaments/{SLUG}/rounds/1"),
         "seq": 1,
         "name": "Round 1",
         "abbreviation": "R1",
         "stage": "P",
         "completed": True,
         "starts_at": None,
-        "motions": [_motion(701, 1, "Motion A")],
     }
     round_without_motion = {
         "id": 602,
-        "url": u(f"/api/v1/tournaments/{SLUG}/rounds/602"),
+        "url": u(f"/api/v1/tournaments/{SLUG}/rounds/2"),
         "seq": 2,
         "name": "Round 2",
         "abbreviation": "R2",
         "stage": "P",
         "completed": False,
         "starts_at": None,
-        "motions": None,
     }
+    motion = _motion(701, round_with_motion["url"], "Motion A")
     with respx.mock:
-        _register_minimal(rounds=[round_with_motion, round_without_motion])
+        _register_minimal(rounds=[round_with_motion, round_without_motion], motions=[motion])
         resp = client.post(IMPORT_URL, json=_import_payload())
 
     assert resp.status_code == 201, resp.text

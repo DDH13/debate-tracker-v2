@@ -192,6 +192,17 @@ def _parse_datetime(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _round_seq_from_url(round_url: str) -> int | None:
+    """Tabbycat round URLs end in the round's ``seq`` (e.g. ``.../rounds/2``), which is
+    the only way to associate a motion with a round: the motions endpoint links back to
+    rounds by URL, not by seq directly, and the round-list endpoint doesn't embed motions
+    at all (only ``motions_released``/``motions_status`` flags)."""
+    try:
+        return int(round_url.rstrip("/").rsplit("/", 1)[-1])
+    except (ValueError, IndexError):
+        return None
+
+
 def _split_name(name: str, last_name: str | None) -> tuple[str | None, str | None]:
     name = name.strip()
     if last_name:
@@ -710,6 +721,18 @@ def _run_import(
         ", ".join(criterion_name_by_url.values()),
     )
 
+    motions_by_round_seq: dict[int, list[dict]] = {}
+    for motion in client.get_list(client.url(f"/api/v1/tournaments/{slug}/motions")):
+        for round_ref in motion.get("rounds") or []:
+            seq = _round_seq_from_url(round_ref.get("round", ""))
+            if seq is not None:
+                motions_by_round_seq.setdefault(seq, []).append(motion)
+    logger.debug(
+        "motions: %d fetched from upstream, assigned to %d round(s)",
+        sum(len(v) for v in motions_by_round_seq.values()),
+        len(motions_by_round_seq),
+    )
+
     starts_ats: list[date] = []
     round_ids_by_seq: dict[int, int] = {}
     rounds_fetched = 0
@@ -735,7 +758,7 @@ def _run_import(
             if starts_at is not None:
                 starts_ats.append(starts_at.date())
 
-            motions = round_data.get("motions") or []
+            motions = motions_by_round_seq.get(round_data["seq"], [])
             if motions:
                 first_motion = motions[0]
                 session.add(
