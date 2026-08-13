@@ -1,10 +1,15 @@
+import logging
+import sqlite3
+
 import httpx
 import respx
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.services.tabbycat import _TabbycatClient, import_tournament
+from app.models import Team, TeamMember
+from app.services.tabbycat import _TabbycatClient, describe_integrity_error, import_tournament
 
 BASE_URL = "https://tab.example.com"
 SLUG = "sample-tab"
@@ -409,7 +414,13 @@ def test_import_happy_path(client: TestClient, session: Session) -> None:
     assert report["debates"] == 1  # the 4-team round-2 pairing is unmappable
     assert report["ballots"] == 2  # Jordan (consensus, wins collision) + Priya
     assert report["speaker_scores"] == 15  # 8 (Jordan) + 7 valid of 8 (Priya, one invalid)
-    assert len(report["skipped"]) == 4
+    skipped = report["skipped"]
+    assert len(skipped) == 5
+    assert any("kept first of 3 motions" in s for s in skipped)          # ROUND2
+    assert any("expected 2 teams, got 4" in s for s in skipped)          # PAIRING_R2_BP
+    assert any("duplicate ballot for judge" in s for s in skipped)       # Jordan v1 vs consensus v2
+    assert any("invalid speaker score" in s for s in skipped)            # Priya's 76.3
+    assert any("adjudicators had no institution" in s for s in skipped)  # new
 
     tournaments = client.get("/api/v1/tournaments").json()
     tournament = next(t for t in tournaments if t["slug"] == SLUG)
@@ -526,3 +537,167 @@ def test_get_list_handles_both_pagination_shapes() -> None:
 
     assert [item["id"] for item in bare] == [1, 2]
     assert [item["id"] for item in paginated] == [1, 2, 3]
+
+
+def _register_minimal(*, teams=None, institutions=None, adjudicators=None, rounds=None):
+    """Registers only the routes exercised by `_run_import` for a slug with no debates,
+    so individual diagnostics can be tested without the full happy-path fixture set."""
+    respx.get(u(f"/api/v1/tournaments/{SLUG}")).mock(return_value=httpx.Response(200, json=TOURNAMENT))
+    respx.get(u("/api/v1/institutions")).mock(return_value=httpx.Response(200, json=institutions or []))
+    respx.get(u(f"/api/v1/tournaments/{SLUG}/teams")).mock(return_value=httpx.Response(200, json=teams or []))
+    respx.get(u(f"/api/v1/tournaments/{SLUG}/adjudicators")).mock(
+        return_value=httpx.Response(200, json=adjudicators or [])
+    )
+    respx.get(u(f"/api/v1/tournaments/{SLUG}/venues")).mock(return_value=httpx.Response(200, json=[]))
+    respx.get(u(f"/api/v1/tournaments/{SLUG}/score-criteria")).mock(return_value=httpx.Response(200, json=[]))
+    respx.get(u(f"/api/v1/tournaments/{SLUG}/rounds")).mock(return_value=httpx.Response(200, json=rounds or []))
+    for round_data in rounds or []:
+        respx.get(u(f"/api/v1/tournaments/{SLUG}/rounds/{round_data['seq']}/pairings")).mock(
+            return_value=httpx.Response(200, json=[])
+        )
+
+
+def test_duplicate_speaker_on_same_team_is_skipped(client: TestClient, session: Session) -> None:
+    team = {
+        "id": 501,
+        "url": u(f"/api/v1/tournaments/{SLUG}/teams/501"),
+        "institution": None,
+        "reference": "1",
+        "short_reference": "1",
+        "short_name": "Team Placeholder",
+        "long_name": "Team Placeholder",
+        "speakers": [
+            _speaker(201, "Chageesha", "", None, None),
+            _speaker(202, "Speaker", "", None, None),
+            _speaker(203, "Speaker", "", None, None),
+        ],
+    }
+    with respx.mock:
+        _register_minimal(teams=[team])
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 201, resp.text
+    report = resp.json()
+    assert report["teams"] == 1
+    assert report["debaters"] == 2  # Chageesha + one "Speaker"; the second "Speaker" dedupes onto it
+    assert any("duplicate" in s.lower() and "Team Placeholder" in s for s in report["skipped"])
+
+    members = session.exec(select(TeamMember)).all()
+    assert len(members) == 2
+
+
+def test_describe_integrity_error_names_constraint() -> None:
+    orig = sqlite3.IntegrityError("UNIQUE constraint failed: teammember.team_id, teammember.debater_id")
+    exc = IntegrityError("INSERT INTO teammember ...", (152, 531), orig)
+
+    detail = describe_integrity_error(exc)
+
+    assert "teammember" in detail
+    assert "team_id" in detail
+    assert "debater_id" in detail
+    assert "(152, 531)" in detail
+
+
+def test_unresolved_institution_is_reported(client: TestClient, session: Session) -> None:
+    team = {
+        "id": 502,
+        "url": u(f"/api/v1/tournaments/{SLUG}/teams/502"),
+        "institution": u("/api/v1/institutions/99"),
+        "reference": "1",
+        "short_reference": "1",
+        "short_name": "Orphan Team",
+        "long_name": "Orphan Team",
+        "speakers": [],
+    }
+    with respx.mock:
+        _register_minimal(teams=[team])
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 201, resp.text
+    report = resp.json()
+    assert any(u("/api/v1/institutions/99") in s and "institution_id" in s for s in report["skipped"])
+
+    team_row = session.exec(select(Team)).first()
+    assert team_row.institution_id is None
+
+
+def test_round_without_motion_is_reported(client: TestClient, session: Session) -> None:
+    round_with_motion = {
+        "id": 601,
+        "url": u(f"/api/v1/tournaments/{SLUG}/rounds/601"),
+        "seq": 1,
+        "name": "Round 1",
+        "abbreviation": "R1",
+        "stage": "P",
+        "completed": True,
+        "starts_at": None,
+        "motions": [_motion(701, 1, "Motion A")],
+    }
+    round_without_motion = {
+        "id": 602,
+        "url": u(f"/api/v1/tournaments/{SLUG}/rounds/602"),
+        "seq": 2,
+        "name": "Round 2",
+        "abbreviation": "R2",
+        "stage": "P",
+        "completed": False,
+        "starts_at": None,
+        "motions": None,
+    }
+    with respx.mock:
+        _register_minimal(rounds=[round_with_motion, round_without_motion])
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 201, resp.text
+    report = resp.json()
+    assert report["motions"] == 1
+    assert any("rounds had no motion" in s for s in report["skipped"])
+
+
+def _clashing_teams() -> tuple[dict, dict]:
+    team_a = {
+        "id": 701,
+        "url": u(f"/api/v1/tournaments/{SLUG}/teams/701"),
+        "institution": u("/api/v1/institutions/99"),  # unresolved -> a skip is recorded before the crash
+        "reference": "1",
+        "short_reference": "1",
+        "short_name": "Clashing Team",
+        "long_name": "Clashing Team",
+        "speakers": [],
+    }
+    team_b = {
+        "id": 702,
+        "url": u(f"/api/v1/tournaments/{SLUG}/teams/702"),
+        "institution": None,
+        "reference": "2",
+        "short_reference": "2",
+        "short_name": "Clashing Team",
+        "long_name": "Clashing Team",  # same name as team_a -> IntegrityError on flush
+        "speakers": [],
+    }
+    return team_a, team_b
+
+
+def test_partial_skips_are_logged_before_rollback(client: TestClient, session: Session, caplog) -> None:
+    team_a, team_b = _clashing_teams()
+
+    with caplog.at_level(logging.DEBUG, logger="app.services.tabbycat"):
+        with respx.mock:
+            _register_minimal(teams=[team_a, team_b])
+            resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 409
+    assert any("skipped (discarded by rollback)" in record.getMessage() for record in caplog.records)
+
+
+def test_integrity_error_detail_names_the_constraint(client: TestClient, session: Session) -> None:
+    team_a, team_b = _clashing_teams()
+
+    with respx.mock:
+        _register_minimal(teams=[team_a, team_b])
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "UNIQUE" in detail
+    assert "team" in detail

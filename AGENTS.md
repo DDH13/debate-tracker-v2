@@ -1,23 +1,40 @@
 # AGENTS.md
 
 FastAPI + SQLModel backend for tracking debate tournaments (Asian/Australs/WSDC two-team
-format, prop vs. opp). SQLite-backed (in-memory by default via `sqlite://`).
+format, prop vs. opp). Postgres-backed via `DATABASE_URL` in `.env`; falls back to
+in-memory SQLite (`sqlite://`) if unset.
 
 ## Setup & running
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/uvicorn app.main:app --reload   # http://localhost:8000/docs, /health
+make dev
+# http://localhost:8000/docs, /health
 ```
 
-Always use the binaries in `.venv/bin/` directly (e.g. `.venv/bin/pytest`,
-`.venv/bin/uvicorn`) rather than assuming an activated shell.
+`make dev` and `make test` wrap the `.venv/bin/gunicorn` / `.venv/bin/pytest` commands
+below (see `Makefile`). Always use the binaries in `.venv/bin/` directly when not going
+through `make` (e.g. `.venv/bin/pytest`, `.venv/bin/gunicorn`) rather than assuming an
+activated shell.
+
+Run under gunicorn, not bare `uvicorn --reload`: uvicorn's own `--reload` supervisor only
+restarts the worker on a file change — if the worker crashes for any other reason (e.g.
+an unhandled exception under concurrent load), it doesn't notice, and the listening
+socket stays open with nothing behind it, so new requests hang forever. gunicorn's
+arbiter monitors and respawns crashed workers regardless of cause, and `-w 2` keeps one
+worker's crash from taking down the whole listener while it respawns.
+
+`app/db/session.py` only uses `StaticPool` + `check_same_thread=False` for the
+in-memory `sqlite://` case (required there since every connection must share the one
+in-memory DB). Postgres uses SQLAlchemy's normal per-thread pool checkout + 
+`pool_pre_ping=True` — do not add `StaticPool` there, it would force every request
+thread onto one shared connection.
 
 ## Tests
 
 ```bash
-.venv/bin/pytest
+make test
 ```
 
 Run the full suite after any model, endpoint, or service change. Tests spin up a fresh

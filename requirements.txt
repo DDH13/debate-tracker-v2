@@ -1,6 +1,9 @@
 fastapi
 sqlmodel
 uvicorn[standard]
+uvicorn-worker
+gunicorn
+psycopg[binary]
 pydantic-settings
 pytest
 httpx

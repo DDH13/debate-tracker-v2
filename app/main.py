@@ -5,8 +5,11 @@ from sqlmodel import Session
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.logging import configure_logging
 from app.db.seed import seed
 from app.db.session import engine, init_db
+
+configure_logging()
 
 
 @asynccontextmanager

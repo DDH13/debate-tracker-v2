@@ -1,3 +1,5 @@
+import logging
+
 import httpx
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
@@ -9,8 +11,11 @@ from app.services.tabbycat import (
     ImportReport,
     TabbycatImportError,
     TournamentAlreadyExists,
+    describe_integrity_error,
     import_tournament,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tournaments", tags=["tournaments"])
 
@@ -69,8 +74,11 @@ def import_tabbycat_tournament(import_in: TabbycatImportRequest, session: Sessio
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
     except IntegrityError as exc:
         session.rollback()
+        detail = describe_integrity_error(exc)
+        logger.warning("import of %s@%s conflicted: %s", import_in.slug, import_in.base_url, detail)
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Import conflicts with existing data"
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Import conflicts with existing data: {detail}",
         ) from exc
 
 

@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     seed_on_startup: bool = False
     tabbycat_base_url: str | None = None
     tabbycat_api_key: str | None = None
+    log_level: str = "DEBUG"
+    import_trace: bool = False
 
 
 settings = Settings()
