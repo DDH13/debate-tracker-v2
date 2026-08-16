@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlmodel import select
 
-from app.api.deps import SessionDep, get_or_404
+from app.api.deps import SessionDep, get_or_404, require_format
 from app.models import (
+    DebateFormat,
     Debater,
     DebaterProfile,
     DebaterProfilePublic,
@@ -65,6 +66,48 @@ def get_side_stats(tournament_id: int, session: SessionDep) -> stats.SideStats:
 def get_motion_stats(tournament_id: int, session: SessionDep) -> list[stats.MotionStat]:
     get_or_404(session, Tournament, tournament_id)
     return stats.motion_stats(session, tournament_id)
+
+
+# --- BP tournament-scoped ---
+
+
+@router.get("/tournaments/{tournament_id}/bp/speaker-tab", response_model=stats.BPSpeakerTab)
+def get_bp_speaker_tab(tournament_id: int, session: SessionDep) -> stats.BPSpeakerTab:
+    tournament = get_or_404(session, Tournament, tournament_id)
+    require_format(tournament, DebateFormat.BP)
+    return stats.bp_speaker_tab(session, tournament_id)
+
+
+@router.get(
+    "/tournaments/{tournament_id}/bp/team-standings", response_model=list[stats.BPTeamStanding]
+)
+def get_bp_team_standings(tournament_id: int, session: SessionDep) -> list[stats.BPTeamStanding]:
+    tournament = get_or_404(session, Tournament, tournament_id)
+    require_format(tournament, DebateFormat.BP)
+    return stats.bp_team_standings(session, tournament_id)
+
+
+@router.get("/tournaments/{tournament_id}/bp/summary", response_model=stats.BPTournamentSummary)
+def get_bp_tournament_summary(tournament_id: int, session: SessionDep) -> stats.BPTournamentSummary:
+    tournament = get_or_404(session, Tournament, tournament_id)
+    require_format(tournament, DebateFormat.BP)
+    return stats.bp_tournament_summary(session, tournament_id)
+
+
+@router.get("/tournaments/{tournament_id}/bp/side-stats", response_model=stats.BPSideStats)
+def get_bp_side_stats(tournament_id: int, session: SessionDep) -> stats.BPSideStats:
+    tournament = get_or_404(session, Tournament, tournament_id)
+    require_format(tournament, DebateFormat.BP)
+    return stats.bp_side_stats(session, tournament_id)
+
+
+@router.get(
+    "/tournaments/{tournament_id}/bp/motion-stats", response_model=list[stats.BPMotionStat]
+)
+def get_bp_motion_stats(tournament_id: int, session: SessionDep) -> list[stats.BPMotionStat]:
+    tournament = get_or_404(session, Tournament, tournament_id)
+    require_format(tournament, DebateFormat.BP)
+    return stats.bp_motion_stats(session, tournament_id)
 
 
 # --- Materialized profiles ---

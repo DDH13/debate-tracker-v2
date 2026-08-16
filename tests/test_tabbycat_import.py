@@ -8,8 +8,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.models import Team, TeamMember
-from app.services.tabbycat import _TabbycatClient, describe_integrity_error, import_tournament
+from app.models import BPDebate, BPDebateTeam, BPSide, Team, TeamMember
+from app.services.tabbycat import (
+    _normalize_bp_side,
+    _TabbycatClient,
+    describe_integrity_error,
+    import_tournament,
+)
 
 BASE_URL = "https://tab.example.com"
 SLUG = "sample-tab"
@@ -28,6 +33,20 @@ TOURNAMENT = {
     "slug": SLUG,
     "current_rounds": [],
 }
+
+PREFERENCES_TWO_TEAM = [
+    {"identifier": "debate_rules__teams_in_debate", "value": 2},
+    {"identifier": "debate_rules__substantive_speakers", "value": 3},
+    {"identifier": "debate_rules__reply_scores_enabled", "value": True},
+    {"identifier": "debate_rules__ballots_per_debate_prelim", "value": "per-adj"},
+]
+
+PREFERENCES_BP = [
+    {"identifier": "debate_rules__teams_in_debate", "value": 4},
+    {"identifier": "debate_rules__substantive_speakers", "value": 2},
+    {"identifier": "debate_rules__reply_scores_enabled", "value": False},
+    {"identifier": "debate_rules__ballots_per_debate_prelim", "value": "per-debate"},
+]
 
 INSTITUTIONS = [
     {"id": 1, "url": u("/api/v1/institutions/1"), "name": "University A", "code": "UA"},
@@ -222,8 +241,72 @@ PAIRING_R2_BP = {
         {"team": TEAM1["url"], "side": "cg", "flags": []},
         {"team": TEAM2["url"], "side": "co", "flags": []},
     ],
-    "adjudicators": None,
+    "adjudicators": {"chair": ADJ_JORDAN["url"], "panellists": [], "trainees": []},
     "flags": [],
+}
+
+
+def _bp_speech(speaker_url: str, score: float) -> dict:
+    return {"speaker": speaker_url, "score": score, "criteria": []}
+
+
+# Consensus BP ballot (adjudicator: null, attributed to the chair) for PAIRING_R2_BP:
+# og (TEAM3) 1st/3pts, co (TEAM2) 2nd/2pts, cg (TEAM1) 3rd/1pt, oo (TEAM4) 4th/0pts.
+SUBMISSION_BP_CONSENSUS = {
+    "id": 20,
+    "result": {
+        "sheets": [
+            {
+                "adjudicator": None,
+                "teams": [
+                    {
+                        "team": TEAM3["url"],
+                        "side": "og",
+                        "points": 3,
+                        "rank": 1,
+                        "speeches": [
+                            _bp_speech(TEAM3["speakers"][0]["url"], 76.0),
+                            _bp_speech(TEAM3["speakers"][1]["url"], 75.0),
+                        ],
+                    },
+                    {
+                        "team": TEAM4["url"],
+                        "side": "oo",
+                        "points": 0,
+                        "rank": 4,
+                        "speeches": [
+                            _bp_speech(TEAM4["speakers"][0]["url"], 70.0),
+                            _bp_speech(TEAM4["speakers"][1]["url"], 69.5),
+                        ],
+                    },
+                    {
+                        "team": TEAM1["url"],
+                        "side": "cg",
+                        "points": 1,
+                        "rank": 3,
+                        "speeches": [
+                            _bp_speech(TEAM1["speakers"][0]["url"], 72.0),
+                            _bp_speech(TEAM1["speakers"][1]["url"], 71.5),
+                        ],
+                    },
+                    {
+                        "team": TEAM2["url"],
+                        "side": "co",
+                        "points": 2,
+                        "rank": 2,
+                        "speeches": [
+                            _bp_speech(TEAM2["speakers"][0]["url"], 74.0),
+                            _bp_speech(TEAM2["speakers"][1]["url"], 73.5),
+                        ],
+                    },
+                ],
+            }
+        ]
+    },
+    "confirmed": True,
+    "discarded": False,
+    "forfeit": False,
+    "version": 1,
 }
 
 
@@ -353,8 +436,12 @@ SUBMISSION_PRIYA = {
 }
 
 
-def register_routes(*, institutions_paginated: bool = True, ballots: bool = True):
+def register_routes(*, institutions_paginated: bool = True, ballots: bool = True, preferences=PREFERENCES_TWO_TEAM):
     respx.get(u(f"/api/v1/tournaments/{SLUG}")).mock(return_value=httpx.Response(200, json=TOURNAMENT))
+    if preferences is None:
+        respx.get(u(f"/api/v1/tournaments/{SLUG}/preferences")).mock(return_value=httpx.Response(403))
+    else:
+        respx.get(u(f"/api/v1/tournaments/{SLUG}/preferences")).mock(return_value=httpx.Response(200, json=preferences))
     if institutions_paginated:
         respx.get(u("/api/v1/institutions")).mock(
             return_value=httpx.Response(
@@ -410,6 +497,7 @@ def test_import_happy_path(client: TestClient, session: Session) -> None:
     assert resp.status_code == 201, resp.text
     report = resp.json()
 
+    assert report["format"] == "two_team"
     assert report["institutions"] == 2
     assert report["teams"] == 4
     assert report["debaters"] == 9  # Andrew Ali and Bob Brooks reused, not double-counted
@@ -433,6 +521,7 @@ def test_import_happy_path(client: TestClient, session: Session) -> None:
     assert tournament["name"] == "Sample Tab"
     assert tournament["abbr"] == "Sample"
     assert tournament["date"] == "2024-06-01"  # earliest Round.starts_at
+    assert tournament["format"] == "two_team"
 
     rounds = client.get(f"/api/v1/tournaments/{tournament['id']}/rounds").json()
     assert len(rounds) == 2
@@ -544,10 +633,16 @@ def test_get_list_handles_both_pagination_shapes() -> None:
     assert [item["id"] for item in paginated] == [1, 2, 3]
 
 
-def _register_minimal(*, teams=None, institutions=None, adjudicators=None, rounds=None, motions=None):
+def _register_minimal(
+    *, teams=None, institutions=None, adjudicators=None, rounds=None, motions=None, preferences=PREFERENCES_TWO_TEAM
+):
     """Registers only the routes exercised by `_run_import` for a slug with no debates,
     so individual diagnostics can be tested without the full happy-path fixture set."""
     respx.get(u(f"/api/v1/tournaments/{SLUG}")).mock(return_value=httpx.Response(200, json=TOURNAMENT))
+    if preferences is None:
+        respx.get(u(f"/api/v1/tournaments/{SLUG}/preferences")).mock(return_value=httpx.Response(403))
+    else:
+        respx.get(u(f"/api/v1/tournaments/{SLUG}/preferences")).mock(return_value=httpx.Response(200, json=preferences))
     respx.get(u("/api/v1/institutions")).mock(return_value=httpx.Response(200, json=institutions or []))
     respx.get(u(f"/api/v1/tournaments/{SLUG}/teams")).mock(return_value=httpx.Response(200, json=teams or []))
     respx.get(u(f"/api/v1/tournaments/{SLUG}/adjudicators")).mock(
@@ -706,3 +801,120 @@ def test_integrity_error_detail_names_the_constraint(client: TestClient, session
     detail = resp.json()["detail"]
     assert "UNIQUE" in detail
     assert "team" in detail
+
+
+def test_normalize_bp_side_accepts_live_tabbycat_values() -> None:
+    # Confirmed against a real BP tournament's /rounds/{seq}/pairings response: Tabbycat's
+    # live API returns literal "og"/"oo"/"cg"/"co" strings, not "aff"/"neg" for the first
+    # two positions. Both "aff"/"neg" and the 0/1 ordinals are kept as accepted aliases.
+    assert _normalize_bp_side("og") == BPSide.OG
+    assert _normalize_bp_side("oo") == BPSide.OO
+    assert _normalize_bp_side("cg") == BPSide.CG
+    assert _normalize_bp_side("co") == BPSide.CO
+    assert _normalize_bp_side("aff") == BPSide.OG
+    assert _normalize_bp_side("neg") == BPSide.OO
+    assert _normalize_bp_side(0) == BPSide.OG
+    assert _normalize_bp_side(1) == BPSide.OO
+    assert _normalize_bp_side("bye") is None
+
+
+def test_bp_format_imports_four_team_pairing(client: TestClient, session: Session) -> None:
+    with respx.mock:
+        register_routes(preferences=PREFERENCES_BP)
+        respx.get(
+            u(f"/api/v1/tournaments/{SLUG}/rounds/2/pairings/2/ballots"), params={"confirmed": "true"}
+        ).mock(return_value=httpx.Response(200, json=[SUBMISSION_BP_CONSENSUS]))
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 201, resp.text
+    report = resp.json()
+    assert report["format"] == "bp"
+    # PAIRING_R1 (2 teams) is unmappable under BP and skipped; only PAIRING_R2_BP imports.
+    assert report["debates"] == 1
+    assert report["ballots"] == 1
+    assert report["speaker_scores"] == 8  # 4 teams x 2 speakers
+    assert any("expected 4 distinct BP sides" in s for s in report["skipped"])
+
+    tournaments = client.get("/api/v1/tournaments").json()
+    tournament = next(t for t in tournaments if t["slug"] == SLUG)
+    assert tournament["format"] == "bp"
+
+    bp_debate = session.exec(select(BPDebate)).first()
+    assert bp_debate is not None
+    team_rows = {
+        row.side.value: (row.rank, row.points)
+        for row in session.exec(
+            select(BPDebateTeam).where(BPDebateTeam.bp_debate_id == bp_debate.id)
+        ).all()
+    }
+    assert team_rows["og"] == (1, 3)
+    assert team_rows["co"] == (2, 2)
+    assert team_rows["cg"] == (3, 1)
+    assert team_rows["oo"] == (4, 0)
+
+
+SUBMISSION_BP_ADVANCE_ONLY = {
+    "id": 21,
+    "result": {
+        "sheets": [
+            {
+                "adjudicator": None,
+                "teams": [
+                    {"team": TEAM3["url"], "side": "og", "points": None, "rank": None, "win": True},
+                    {"team": TEAM4["url"], "side": "oo", "points": None, "rank": None, "win": False},
+                    {"team": TEAM1["url"], "side": "cg", "points": None, "rank": None, "win": True},
+                    {"team": TEAM2["url"], "side": "co", "points": None, "rank": None, "win": False},
+                ],
+            }
+        ]
+    },
+    "confirmed": True,
+    "discarded": False,
+    "forfeit": False,
+    "version": 1,
+}
+
+
+def test_bp_ballot_advance_eliminate_fallback(client: TestClient, session: Session) -> None:
+    # Confirmed against a real BP tournament's elimination rounds: Tabbycat sometimes
+    # reports only a win/advance flag per team (no points/rank at all), e.g. 2 advance +
+    # 2 eliminated in a quarter/semi. The importer should record that instead of
+    # skipping the ballot outright.
+    with respx.mock:
+        register_routes(preferences=PREFERENCES_BP)
+        respx.get(
+            u(f"/api/v1/tournaments/{SLUG}/rounds/2/pairings/2/ballots"), params={"confirmed": "true"}
+        ).mock(return_value=httpx.Response(200, json=[SUBMISSION_BP_ADVANCE_ONLY]))
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 201, resp.text
+    report = resp.json()
+    assert report["format"] == "bp"
+    assert report["debates"] == 1
+    assert report["ballots"] == 1
+    assert report["speaker_scores"] == 0  # no speeches recorded for advance-only ballots
+    assert not any("no valid ranking" in s for s in report["skipped"])
+
+    bp_debate = session.exec(select(BPDebate)).first()
+    team_rows = {
+        row.side.value: (row.rank, row.points, row.advanced)
+        for row in session.exec(
+            select(BPDebateTeam).where(BPDebateTeam.bp_debate_id == bp_debate.id)
+        ).all()
+    }
+    assert team_rows["og"] == (None, None, True)
+    assert team_rows["cg"] == (None, None, True)
+    assert team_rows["oo"] == (None, None, False)
+    assert team_rows["co"] == (None, None, False)
+
+
+def test_preferences_403_falls_back_to_pairing_inference(client: TestClient, session: Session) -> None:
+    with respx.mock:
+        register_routes(preferences=None, ballots=False)
+        resp = client.post(IMPORT_URL, json=_import_payload(include_ballots=False))
+
+    assert resp.status_code == 201, resp.text
+    report = resp.json()
+    # First round's pairing (PAIRING_R1) has 2 teams, so the fallback infers two-team.
+    assert report["format"] == "two_team"
+    assert any("could not read tournament preferences" in s for s in report["skipped"])

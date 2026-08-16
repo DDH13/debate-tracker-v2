@@ -10,6 +10,12 @@ if TYPE_CHECKING:
     from app.models.debater import Debater
 
 
+def validate_half_point(value: float | None) -> float | None:
+    if value is not None and (value * 2) % 1 != 0:
+        raise ValueError("scores must be a multiple of 0.5")
+    return value
+
+
 class SpeakerScoreBase(SQLModel):
     side: Side
     position: SpeakerPosition
@@ -21,9 +27,7 @@ class SpeakerScoreBase(SQLModel):
     @field_validator("content", "style", "strategy", "final_score")
     @classmethod
     def must_be_half_point(cls, value: float | None) -> float | None:
-        if value is not None and (value * 2) % 1 != 0:
-            raise ValueError("scores must be a multiple of 0.5")
-        return value
+        return validate_half_point(value)
 
 
 class SpeakerScore(SpeakerScoreBase, table=True):

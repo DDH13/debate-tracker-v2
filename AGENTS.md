@@ -1,8 +1,30 @@
 # AGENTS.md
 
-FastAPI + SQLModel backend for tracking debate tournaments (Asian/Australs/WSDC two-team
-format, prop vs. opp). Postgres-backed via `DATABASE_URL` in `.env`; falls back to
-in-memory SQLite (`sqlite://`) if unset.
+FastAPI + SQLModel backend for tracking debate tournaments. Supports two independent
+formats, selected per-tournament via `Tournament.format`:
+
+- **Two-team** (Asian/Australs/WSDC, prop vs. opp) — the original stack: `Debate`,
+  `Ballot`, `SpeakerScore`, `app/services/stats/tournament.py`, `app/api/v1/endpoints/
+  debates.py` and `ballots.py`.
+- **BP** (British Parliamentary, 4 teams — OG/OO/CG/CO, 2 speakers each, no reply, no
+  winner) — a parallel stack: `BPDebate`/`BPBallot`/`BPSpeakerScore` models,
+  `app/services/stats/bp.py`, `app/api/v1/endpoints/bp_debates.py` and `bp_ballots.py`.
+  A BP debate's result is a *ranking* of the four teams worth 3/2/1/0 team points
+  (`bp_points_for_rank`), not a win/loss. Elimination rounds sometimes carry no
+  points/rank at all upstream — only a win/advance flag per team (2 advance + 2
+  eliminated in a quarter/semi, 1 champion + 3 non-champions in the grand final) — in
+  which case `BPBallotTeam.advanced`/`BPDebateTeam.advanced` is set instead and
+  `rank`/`points` stay `None`, rather than fabricating a placement that isn't there.
+
+Participant-level entities (`Tournament`, `Round`, `Motion`, `Institution`, `Team`,
+`TeamMember`, `Debater`, `Judge`) are shared between both formats; the fork happens at
+the debate/ballot/score layer. Career profiles (`DebaterProfile`/`JudgeProfile`,
+`app/services/stats/profiles.py`) are two-team-only for now — BP tournaments are
+explicitly excluded and counted via `RefreshResult.bp_tournaments_excluded`, since
+unifying career stats across formats is a deliberate follow-up.
+
+Postgres-backed via `DATABASE_URL` in `.env`; falls back to in-memory SQLite
+(`sqlite://`) if unset.
 
 ## Setup & running
 
@@ -53,11 +75,14 @@ in-memory SQLite engine per test via the `session`/`client` fixtures in
 - `app/services/stats/` — pure computation over ballots/debates for tournament, debater,
   and judge statistics.
 - `app/services/tabbycat.py` — importer that pulls a tournament from a
-  [Tabbycat](https://tabbycat.readthedocs.io) instance. Tabbycat's model (BP-style 4-team
-  debates, multiple motions per round, arbitrary scoring criteria) is richer than this
-  app's two-team schema, so anything that doesn't map is skipped, not aborted — see the
-  `skipped` list in `ImportReport`. There is no `tabbycat_id` column, so re-importing the
-  same slug is not idempotent and raises `409`.
+  [Tabbycat](https://tabbycat.readthedocs.io) instance. Detects two-team vs. BP by
+  reading the tournament's `debate_rules__teams_in_debate` preference (readable
+  anonymously, no API key), falling back to inferring from the first round's pairing
+  size if that endpoint isn't reachable. Tabbycat's model is still richer than either
+  local schema (multiple motions per round, arbitrary scoring criteria), so anything
+  that doesn't map is skipped, not aborted — see the `skipped` list in `ImportReport`.
+  There is no `tabbycat_id` column, so re-importing the same slug is not idempotent and
+  raises `409`.
 - `app/core/config.py` — `pydantic-settings` config read from `.env` with `extra="ignore"`,
   so a typo'd env var name is silently ignored rather than erroring.
 

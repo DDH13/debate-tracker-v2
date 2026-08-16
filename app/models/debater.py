@@ -6,6 +6,7 @@ from app.models.institution import Institution
 from app.models.participant import ParticipantBase
 
 if TYPE_CHECKING:
+    from app.models.bp_speaker_score import BPSpeakerScore
     from app.models.speaker_score import SpeakerScore
     from app.models.team_member import TeamMember
 
@@ -24,6 +25,7 @@ class Debater(DebaterBase, table=True):
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
     )
     scores: list["SpeakerScore"] = Relationship(back_populates="debater")
+    bp_scores: list["BPSpeakerScore"] = Relationship(back_populates="debater")
 
 
 class DebaterCreate(DebaterBase):

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from sqlmodel import Session, SQLModel, select
 
-from app.models import Ballot, Debater, Round, SpeakerPosition, SpeakerScore, Tournament
+from app.models import Ballot, DebateFormat, Debater, Round, SpeakerPosition, SpeakerScore, Tournament
 from app.services.stats import core
 from app.services.stats import tournament as tournament_stats
 
@@ -54,16 +54,23 @@ class HeadToHeadRecord(SQLModel):
 
 
 def compute_debater_aggregates(session: Session) -> dict[int, DebaterAggregate]:
-    """One pass over every tournament, building career aggregates for every debater who has
-    debated at least one round. Debaters with zero rounds are absent from the result, which
-    is what excludes them from every downstream win-rate population."""
+    """One pass over every two-team tournament, building career aggregates for every
+    debater who has debated at least one round. Debaters with zero rounds are absent from
+    the result, which is what excludes them from every downstream win-rate population.
+    BP tournaments are explicitly excluded (see `RefreshResult.bp_tournaments_excluded`)
+    rather than merely absent-by-construction, since career profiles don't yet unify
+    across formats."""
     aggregates: dict[int, DebaterAggregate] = defaultdict(DebaterAggregate)
 
-    tournaments = {t.id: t for t in session.exec(select(Tournament)).all()}
+    tournaments = {
+        t.id: t for t in session.exec(select(Tournament)).all() if t.format == DebateFormat.TWO_TEAM
+    }
     rounds_by_id = {r.id: r for r in session.exec(select(Round)).all()}
 
     records_by_tournament: dict[int, list[core.Participation]] = defaultdict(list)
     for record in core.participation(session):
+        if record.tournament_id not in tournaments:
+            continue
         records_by_tournament[record.tournament_id].append(record)
 
     for tournament_id, trecs in records_by_tournament.items():

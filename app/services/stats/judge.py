@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from sqlmodel import Session, SQLModel, select
 
-from app.models import Ballot, Debate, Judge, Round, SpeakerPosition, SpeakerScore
+from app.models import Ballot, Debate, DebateFormat, Judge, Round, SpeakerPosition, SpeakerScore, Tournament
 from app.services.stats import core
 
 DEFAULT_SENTIMENT_DEVIATION = 0.5
@@ -82,6 +82,10 @@ class JudgeSentiment(SQLModel):
 
 
 def compute_judge_aggregates(session: Session) -> dict[int, JudgeAggregate]:
+    """Career aggregates over two-team ballots only. BP tournaments are explicitly
+    excluded (see `RefreshResult.bp_tournaments_excluded`), matching
+    `debater_stats.compute_debater_aggregates`, since career profiles don't yet unify
+    across formats."""
     aggregates: dict[int, JudgeAggregate] = defaultdict(JudgeAggregate)
 
     ballot_rows = session.exec(
@@ -99,6 +103,8 @@ def compute_judge_aggregates(session: Session) -> dict[int, JudgeAggregate]:
         )
         .join(Debate, Ballot.debate_id == Debate.id)
         .join(Round, Debate.round_id == Round.id)
+        .join(Tournament, Round.tournament_id == Tournament.id)
+        .where(Tournament.format == DebateFormat.TWO_TEAM)
     ).all()
 
     for (

@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 
 if TYPE_CHECKING:
+    from app.models.bp_debate import BPDebate
     from app.models.debate import Debate
     from app.models.motion import Motion
     from app.models.tournament import Tournament
@@ -28,6 +29,10 @@ class Round(RoundBase, table=True):
         sa_relationship_kwargs={"uselist": False, "cascade": "all, delete-orphan"},
     )
     debates: list["Debate"] = Relationship(
+        back_populates="round",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+    bp_debates: list["BPDebate"] = Relationship(
         back_populates="round",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
     )

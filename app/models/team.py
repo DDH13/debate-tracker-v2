@@ -5,6 +5,7 @@ from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 from app.models.institution import Institution
 
 if TYPE_CHECKING:
+    from app.models.bp_debate import BPDebateTeam
     from app.models.debate import Debate
     from app.models.team_member import TeamMember
     from app.models.tournament import Tournament
@@ -35,6 +36,7 @@ class Team(TeamBase, table=True):
         back_populates="team",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
     )
+    bp_debate_links: list["BPDebateTeam"] = Relationship(back_populates="team")
 
 
 class TeamCreate(TeamBase):

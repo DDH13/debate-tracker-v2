@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import time
+from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -24,7 +25,17 @@ from app.core.config import settings
 from app.db.session import engine
 from app.models import (
     Ballot,
+    BPBallot,
+    BPBallotTeam,
+    BPDebate,
+    BPDebateTeam,
+    BPDebateJudge,
+    BPPosition,
+    BPSide,
+    BPSpeakerScore,
+    BPSpeakerScoreCreate,
     Debate,
+    DebateFormat,
     DebateJudge,
     Debater,
     Institution,
@@ -39,6 +50,7 @@ from app.models import (
     TeamMember,
     Tournament,
 )
+from app.services.stats.bp import bp_points_for_rank
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +81,7 @@ class TournamentAlreadyExists(Exception):
 
 class ImportReport(BaseModel):
     tournament_id: int
+    format: DebateFormat = DebateFormat.TWO_TEAM
     institutions: int = 0
     teams: int = 0
     debaters: int = 0
@@ -315,6 +328,57 @@ def _normalize_side(value) -> str | None:
     return None
 
 
+_BP_SIDE_MAP = {
+    "og": BPSide.OG,
+    "aff": BPSide.OG,
+    0: BPSide.OG,
+    "oo": BPSide.OO,
+    "neg": BPSide.OO,
+    1: BPSide.OO,
+    "cg": BPSide.CG,
+    2: BPSide.CG,
+    "co": BPSide.CO,
+    3: BPSide.CO,
+}
+
+
+def _normalize_bp_side(value) -> BPSide | None:
+    """Tabbycat's live API returns literal "og"/"oo"/"cg"/"co" side strings for BP
+    pairings (confirmed against a real BP tournament); "aff"/"neg"/0/1 are accepted too
+    as aliases in case an older/different Tabbycat version reuses the two-team ordinals
+    for the first two BP positions."""
+    return _BP_SIDE_MAP.get(value)
+
+
+def _detect_format(
+    client: _TabbycatClient,
+    slug: str,
+    report: ImportReport,
+    pairings_by_seq: dict[int, list[dict]],
+) -> tuple[DebateFormat, int]:
+    """Detect two-team vs BP from the tournament's own debate-rules preferences, readable
+    anonymously (no API key). Returns `(format, substantive_speakers)`; the speaker count
+    only matters for BP (sizes the speech slice taken from each ballot's speeches list).
+    Falls back to inferring from the largest pairing in the first round if the
+    preferences endpoint isn't reachable."""
+    try:
+        preferences = client.get_list(client.url(f"/api/v1/tournaments/{slug}/preferences"))
+        by_identifier = {p["identifier"]: p["value"] for p in preferences}
+        teams_in_debate = int(str(by_identifier["debate_rules__teams_in_debate"]))
+        if teams_in_debate == 4:
+            substantive_speakers = int(str(by_identifier.get("debate_rules__substantive_speakers", 2)))
+            return DebateFormat.BP, substantive_speakers
+        return DebateFormat.TWO_TEAM, 3
+    except (TabbycatImportError, KeyError, ValueError, TypeError) as exc:
+        _skip(report, f"could not read tournament preferences ({exc}), inferring format from pairings")
+        first_seq = min(pairings_by_seq) if pairings_by_seq else None
+        first_round_pairings = pairings_by_seq.get(first_seq, []) if first_seq is not None else []
+        max_teams = max((len(p.get("teams") or []) for p in first_round_pairings), default=0)
+        if max_teams == 4:
+            return DebateFormat.BP, 2
+        return DebateFormat.TWO_TEAM, 3
+
+
 def _match_criteria(
     criteria: list[dict], criterion_name_by_url: dict[str, str]
 ) -> tuple[float, float, float] | None:
@@ -497,6 +561,486 @@ def _recompute_debate_winner(session: Session, debate: Debate) -> None:
     elif opp_votes > prop_votes:
         debate.winner = Side.OPP
         session.add(debate)
+
+
+def _import_two_team_pairings(
+    session: Session,
+    client: _TabbycatClient,
+    seq: int,
+    round_id: int,
+    pairings: list[dict],
+    *,
+    team_by_url: dict[str, int],
+    judge_by_url: dict[str, int],
+    debater_by_url: dict[str, int],
+    criterion_name_by_url: dict[str, str],
+    venue_name_by_url: dict[str, str],
+    include_ballots: bool,
+    report: ImportReport,
+) -> None:
+    round_debates_created = 0
+    round_pairings_skipped = 0
+    for pairing in pairings:
+        with _record_context(f"round {seq} pairing {pairing.get('id')}", pairing):
+            teams = pairing.get("teams") or []
+            if len(teams) != 2:
+                _skip(
+                    report,
+                    f"Round {seq} pairing {pairing.get('id')}: expected 2 teams, got {len(teams)}, skipped",
+                )
+                round_pairings_skipped += 1
+                continue
+
+            sides: dict[str, str] = {}
+            for team_entry in teams:
+                side = _normalize_side(team_entry.get("side"))
+                if side is None or side in sides:
+                    sides = {}
+                    break
+                sides[side] = team_entry.get("team")
+            if "prop" not in sides or "opp" not in sides:
+                _skip(
+                    report,
+                    f"Round {seq} pairing {pairing.get('id')}: unmappable sides (BP or bye), skipped",
+                )
+                round_pairings_skipped += 1
+                continue
+
+            prop_team_id = team_by_url.get(sides["prop"])
+            opp_team_id = team_by_url.get(sides["opp"])
+            if prop_team_id is None or opp_team_id is None:
+                _skip(
+                    report,
+                    f"Round {seq} pairing {pairing.get('id')}: team not found in imported set, skipped",
+                )
+                round_pairings_skipped += 1
+                continue
+
+            venue_url = pairing.get("venue")
+            room = venue_name_by_url.get(venue_url) if venue_url else None
+
+            debate = Debate(
+                round_id=round_id, prop_team_id=prop_team_id, opp_team_id=opp_team_id, room=room
+            )
+            session.add(debate)
+            session.flush()
+            report.debates += 1
+            round_debates_created += 1
+            logger.debug(
+                "round %d debate id=%s: prop=%s opp=%s room=%r", seq, debate.id, prop_team_id, opp_team_id, room
+            )
+
+            judge_ids_on_panel: set[int] = set()
+            chair_judge_id: int | None = None
+            adjudicators = pairing.get("adjudicators")
+            if adjudicators:
+                chair_url = adjudicators.get("chair")
+                if chair_url:
+                    chair_judge_id = judge_by_url.get(chair_url)
+                    if chair_judge_id is not None:
+                        session.add(DebateJudge(debate_id=debate.id, judge_id=chair_judge_id, is_chair=True))
+                        judge_ids_on_panel.add(chair_judge_id)
+                for panellist_url in adjudicators.get("panellists") or []:
+                    judge_id = judge_by_url.get(panellist_url)
+                    if judge_id is not None:
+                        if judge_id in judge_ids_on_panel:
+                            logger.warning(
+                                "debate %s: judge id=%s listed as panellist but already on panel "
+                                "(e.g. chair) — would violate uniq(debate_id, judge_id), skipping duplicate",
+                                debate.id,
+                                judge_id,
+                            )
+                            continue
+                        session.add(DebateJudge(debate_id=debate.id, judge_id=judge_id))
+                        judge_ids_on_panel.add(judge_id)
+                for trainee_url in adjudicators.get("trainees") or []:
+                    judge_id = judge_by_url.get(trainee_url)
+                    if judge_id is not None:
+                        if judge_id in judge_ids_on_panel:
+                            logger.warning(
+                                "debate %s: judge id=%s listed as trainee but already on panel "
+                                "— would violate uniq(debate_id, judge_id), skipping duplicate",
+                                debate.id,
+                                judge_id,
+                            )
+                            continue
+                        session.add(DebateJudge(debate_id=debate.id, judge_id=judge_id, is_trainee=True))
+                        judge_ids_on_panel.add(judge_id)
+                session.flush()
+
+            if include_ballots:
+                _import_ballots(
+                    session,
+                    client,
+                    seq,
+                    pairing["id"],
+                    debate,
+                    judge_by_url=judge_by_url,
+                    team_by_url=team_by_url,
+                    debater_by_url=debater_by_url,
+                    criterion_name_by_url=criterion_name_by_url,
+                    chair_judge_id=chair_judge_id,
+                    judge_ids_on_panel=judge_ids_on_panel,
+                    report=report,
+                )
+    logger.info(
+        "round %d: %d debate(s) created, %d pairing(s) skipped", seq, round_debates_created, round_pairings_skipped
+    )
+
+
+def _recompute_bp_debate_result(session: Session, bp_debate: BPDebate) -> None:
+    """Sum each side's rank across non-discarded, fully-ranked ballots, re-rank ascending
+    (lowest total wins), and write `rank`/`points` onto the `BPDebateTeam` rows. If no
+    ballot has a full ranking but some record advance/eliminate instead (elimination
+    rounds where Tabbycat only tracks who went through), majority-vote `advanced` per
+    side and write that instead, leaving `rank`/`points` `None` since there's no data to
+    derive a full placement from. Mirrors `_recompute_bp_debate_result` in
+    app/api/v1/endpoints/bp_ballots.py (kept separate since services shouldn't import
+    from the API layer)."""
+    ballots = session.exec(select(BPBallot).where(BPBallot.bp_debate_id == bp_debate.id)).all()
+    counted_ballot_ids = [b.id for b in ballots if not b.discarded]
+    if not counted_ballot_ids:
+        return
+
+    rankings = session.exec(
+        select(BPBallotTeam).where(BPBallotTeam.bp_ballot_id.in_(counted_ballot_ids))
+    ).all()
+    debate_teams = session.exec(
+        select(BPDebateTeam).where(BPDebateTeam.bp_debate_id == bp_debate.id)
+    ).all()
+
+    total_by_side: dict[BPSide, int] = defaultdict(int)
+    for ranking in rankings:
+        if ranking.rank is not None:
+            total_by_side[ranking.side] += ranking.rank
+    if len(total_by_side) == 4:
+        rank_by_side = {
+            side: rank
+            for rank, (side, _total) in enumerate(sorted(total_by_side.items(), key=lambda kv: kv[1]), start=1)
+        }
+        for debate_team in debate_teams:
+            rank = rank_by_side.get(debate_team.side)
+            if rank is not None:
+                debate_team.rank = rank
+                debate_team.points = bp_points_for_rank(rank)
+                session.add(debate_team)
+        return
+
+    votes_by_side: dict[BPSide, list[bool]] = defaultdict(list)
+    for ranking in rankings:
+        if ranking.advanced is not None:
+            votes_by_side[ranking.side].append(ranking.advanced)
+    for debate_team in debate_teams:
+        votes = votes_by_side.get(debate_team.side)
+        if votes:
+            debate_team.advanced = sum(votes) > len(votes) / 2
+            session.add(debate_team)
+
+
+def _import_bp_ballots(
+    session: Session,
+    client: _TabbycatClient,
+    round_seq: int,
+    debate_pk: int,
+    bp_debate: BPDebate,
+    *,
+    judge_by_url: dict[str, int],
+    side_by_team_url: dict[str, BPSide],
+    debater_by_url: dict[str, int],
+    substantive_speakers: int,
+    chair_judge_id: int | None,
+    judge_ids_on_panel: set[int],
+    report: ImportReport,
+) -> None:
+    with _record_context(
+        f"BP ballots for debate {bp_debate.id}", {"round_seq": round_seq, "debate_pk": debate_pk}
+    ):
+        ballots_url = client.url(
+            f"/api/v1/tournaments/{client.slug}/rounds/{round_seq}/pairings/{debate_pk}/ballots?confirmed=true"
+        )
+        submissions = client.get_list(ballots_url)
+        logger.debug("BP debate %s: %d ballot submission(s) fetched", bp_debate.id, len(submissions))
+
+        sheet_by_judge: dict[int, tuple[int, dict, dict]] = {}
+        for submission in submissions:
+            if submission.get("discarded"):
+                continue
+            version = submission.get("version") or 0
+            for sheet in (submission.get("result") or {}).get("sheets", []):
+                adjudicator_url = sheet.get("adjudicator")
+                if adjudicator_url:
+                    judge_id = judge_by_url.get(adjudicator_url)
+                    if judge_id is None:
+                        _skip(
+                            report,
+                            f"BP debate {bp_debate.id}: ballot adjudicator not in imported panel, skipped",
+                        )
+                        continue
+                else:
+                    judge_id = chair_judge_id
+                    if judge_id is None:
+                        _skip(
+                            report,
+                            f"BP debate {bp_debate.id}: consensus ballot has no chair to attribute, skipped",
+                        )
+                        continue
+                if judge_id not in judge_ids_on_panel:
+                    _skip(
+                        report,
+                        f"BP debate {bp_debate.id}: ballot judge {judge_id} not on imported panel, skipped",
+                    )
+                    continue
+
+                existing = sheet_by_judge.get(judge_id)
+                if existing is not None:
+                    _skip(
+                        report,
+                        f"BP debate {bp_debate.id}: duplicate ballot for judge {judge_id}, kept highest version",
+                    )
+                    if version <= existing[0]:
+                        continue
+                sheet_by_judge[judge_id] = (version, sheet, submission)
+
+        any_ballot = False
+        debate_ballots = 0
+        debate_scores = 0
+        for judge_id, (_version, sheet, submission) in sheet_by_judge.items():
+            teams = sheet.get("teams") or []
+
+            resolved_teams: list[tuple[BPSide, dict]] = []
+            for team_result in teams:
+                side = side_by_team_url.get(team_result.get("team"))
+                if side is not None:
+                    resolved_teams.append((side, team_result))
+            if len(resolved_teams) != 4:
+                _skip(
+                    report,
+                    f"BP debate {bp_debate.id}: ballot for judge {judge_id} covers "
+                    f"{len(resolved_teams)}/4 teams, skipped",
+                )
+                continue
+
+            rank_by_side: dict[BPSide, int] = {}
+            for side, team_result in resolved_teams:
+                points = team_result.get("points")
+                if points is not None:
+                    rank_by_side[side] = 4 - int(points)
+                elif team_result.get("rank") is not None:
+                    rank_by_side[side] = int(team_result["rank"])
+
+            advanced_by_side: dict[BPSide, bool] = {}
+            if sorted(rank_by_side.values()) != [1, 2, 3, 4]:
+                rank_by_side = {}
+                # Elimination rounds sometimes carry no points/rank at all, only a
+                # win/advance flag per team (e.g. 2 advance + 2 eliminated in a
+                # quarter/semi, 1 champion + 3 non-champions in the grand final).
+                for side, team_result in resolved_teams:
+                    win = team_result.get("win")
+                    if win is not None:
+                        advanced_by_side[side] = bool(win)
+                if len(advanced_by_side) != 4 or not any(advanced_by_side.values()):
+                    _skip(
+                        report,
+                        f"BP debate {bp_debate.id}: ballot for judge {judge_id} has no valid "
+                        f"ranking or advance/eliminate data, skipped",
+                    )
+                    continue
+
+            ballot = BPBallot(
+                bp_debate_id=bp_debate.id,
+                judge_id=judge_id,
+                forfeit=bool(submission.get("forfeit", False)),
+            )
+            session.add(ballot)
+            session.flush()
+            report.ballots += 1
+            debate_ballots += 1
+            any_ballot = True
+
+            for side, rank in rank_by_side.items():
+                session.add(BPBallotTeam(bp_ballot_id=ballot.id, side=side, rank=rank))
+            for side, advanced in advanced_by_side.items():
+                session.add(BPBallotTeam(bp_ballot_id=ballot.id, side=side, advanced=advanced))
+
+            for side, team_result in resolved_teams:
+                speeches = team_result.get("speeches") or []
+                if len(speeches) > substantive_speakers:
+                    _skip(
+                        report,
+                        f"BP debate {bp_debate.id} judge {judge_id}: {len(speeches)} speeches, "
+                        f"kept first {substantive_speakers}",
+                    )
+                for index, speech in enumerate(speeches[:substantive_speakers]):
+                    debater_id = debater_by_url.get(speech.get("speaker"))
+                    if debater_id is None:
+                        _skip(
+                            report,
+                            f"BP debate {bp_debate.id} judge {judge_id}: speech speaker not found, skipped",
+                        )
+                        continue
+
+                    try:
+                        score_in = BPSpeakerScoreCreate(
+                            debater_id=debater_id,
+                            side=side,
+                            position=BPPosition(index + 1),
+                            final_score=speech.get("score"),
+                        )
+                    except ValidationError as exc:
+                        _skip(
+                            report,
+                            f"BP debate {bp_debate.id} judge {judge_id}: invalid speaker score, skipped ({exc})",
+                        )
+                        continue
+
+                    row = BPSpeakerScore.model_validate(score_in, update={"bp_ballot_id": ballot.id})
+                    session.add(row)
+                    report.speaker_scores += 1
+                    debate_scores += 1
+            session.flush()
+
+        if any_ballot:
+            _recompute_bp_debate_result(session, bp_debate)
+
+        logger.info("BP debate %s: %d ballot(s), %d score(s)", bp_debate.id, debate_ballots, debate_scores)
+
+
+def _import_bp_pairings(
+    session: Session,
+    client: _TabbycatClient,
+    seq: int,
+    round_id: int,
+    pairings: list[dict],
+    *,
+    team_by_url: dict[str, int],
+    judge_by_url: dict[str, int],
+    debater_by_url: dict[str, int],
+    venue_name_by_url: dict[str, str],
+    substantive_speakers: int,
+    include_ballots: bool,
+    report: ImportReport,
+) -> None:
+    round_debates_created = 0
+    round_pairings_skipped = 0
+    for pairing in pairings:
+        with _record_context(f"round {seq} BP pairing {pairing.get('id')}", pairing):
+            teams = pairing.get("teams") or []
+
+            sides: dict[BPSide, str] = {}
+            valid = True
+            for team_entry in teams:
+                side = _normalize_bp_side(team_entry.get("side"))
+                if side is None or side in sides:
+                    valid = False
+                    break
+                sides[side] = team_entry.get("team")
+            if not valid or len(sides) != 4:
+                _skip(
+                    report,
+                    f"Round {seq} pairing {pairing.get('id')}: expected 4 distinct BP sides, "
+                    f"got {len(teams)}, skipped",
+                )
+                round_pairings_skipped += 1
+                continue
+
+            team_id_by_side: dict[BPSide, int] = {}
+            unresolved = False
+            for side, team_url in sides.items():
+                team_id = team_by_url.get(team_url)
+                if team_id is None:
+                    unresolved = True
+                    break
+                team_id_by_side[side] = team_id
+            if unresolved:
+                _skip(
+                    report,
+                    f"Round {seq} pairing {pairing.get('id')}: team not found in imported set, skipped",
+                )
+                round_pairings_skipped += 1
+                continue
+
+            venue_url = pairing.get("venue")
+            room = venue_name_by_url.get(venue_url) if venue_url else None
+
+            bp_debate = BPDebate(round_id=round_id, room=room)
+            session.add(bp_debate)
+            session.flush()
+            report.debates += 1
+            round_debates_created += 1
+
+            for side, team_id in team_id_by_side.items():
+                session.add(BPDebateTeam(bp_debate_id=bp_debate.id, team_id=team_id, side=side))
+            session.flush()
+            logger.debug(
+                "round %d BP debate id=%s: sides=%s room=%r",
+                seq,
+                bp_debate.id,
+                {s.value: t for s, t in team_id_by_side.items()},
+                room,
+            )
+
+            judge_ids_on_panel: set[int] = set()
+            chair_judge_id: int | None = None
+            adjudicators = pairing.get("adjudicators")
+            if adjudicators:
+                chair_url = adjudicators.get("chair")
+                if chair_url:
+                    chair_judge_id = judge_by_url.get(chair_url)
+                    if chair_judge_id is not None:
+                        session.add(
+                            BPDebateJudge(bp_debate_id=bp_debate.id, judge_id=chair_judge_id, is_chair=True)
+                        )
+                        judge_ids_on_panel.add(chair_judge_id)
+                for panellist_url in adjudicators.get("panellists") or []:
+                    judge_id = judge_by_url.get(panellist_url)
+                    if judge_id is not None:
+                        if judge_id in judge_ids_on_panel:
+                            logger.warning(
+                                "BP debate %s: judge id=%s listed as panellist but already on panel "
+                                "— would violate uniq(bp_debate_id, judge_id), skipping duplicate",
+                                bp_debate.id,
+                                judge_id,
+                            )
+                            continue
+                        session.add(BPDebateJudge(bp_debate_id=bp_debate.id, judge_id=judge_id))
+                        judge_ids_on_panel.add(judge_id)
+                for trainee_url in adjudicators.get("trainees") or []:
+                    judge_id = judge_by_url.get(trainee_url)
+                    if judge_id is not None:
+                        if judge_id in judge_ids_on_panel:
+                            logger.warning(
+                                "BP debate %s: judge id=%s listed as trainee but already on panel "
+                                "— would violate uniq(bp_debate_id, judge_id), skipping duplicate",
+                                bp_debate.id,
+                                judge_id,
+                            )
+                            continue
+                        session.add(BPDebateJudge(bp_debate_id=bp_debate.id, judge_id=judge_id, is_trainee=True))
+                        judge_ids_on_panel.add(judge_id)
+                session.flush()
+
+            if include_ballots:
+                side_by_team_url = {url: side for side, url in sides.items()}
+                _import_bp_ballots(
+                    session,
+                    client,
+                    seq,
+                    pairing["id"],
+                    bp_debate,
+                    judge_by_url=judge_by_url,
+                    side_by_team_url=side_by_team_url,
+                    debater_by_url=debater_by_url,
+                    substantive_speakers=substantive_speakers,
+                    chair_judge_id=chair_judge_id,
+                    judge_ids_on_panel=judge_ids_on_panel,
+                    report=report,
+                )
+    logger.info(
+        "round %d (BP): %d debate(s) created, %d pairing(s) skipped",
+        seq,
+        round_debates_created,
+        round_pairings_skipped,
+    )
 
 
 def _run_import(
@@ -823,117 +1367,50 @@ def _run_import(
         rounds_no_motion,
     )
 
+    pairings_by_seq: dict[int, list[dict]] = {
+        seq: client.get_list(client.url(f"/api/v1/tournaments/{slug}/rounds/{seq}/pairings"))
+        for seq in round_ids_by_seq
+    }
+
+    detected_format, substantive_speakers = _detect_format(client, slug, report, pairings_by_seq)
+    tournament.format = detected_format
+    session.add(tournament)
+    report.format = detected_format
+    logger.info("detected format=%s substantive_speakers=%s", detected_format.value, substantive_speakers)
+
     for seq, round_id in round_ids_by_seq.items():
-        pairings = client.get_list(client.url(f"/api/v1/tournaments/{slug}/rounds/{seq}/pairings"))
+        pairings = pairings_by_seq[seq]
         logger.info("round %d: %d pairings fetched", seq, len(pairings))
-        round_debates_created = 0
-        round_pairings_skipped = 0
-        for pairing in pairings:
-            with _record_context(f"round {seq} pairing {pairing.get('id')}", pairing):
-                teams = pairing.get("teams") or []
-                if len(teams) != 2:
-                    _skip(
-                        report,
-                        f"Round {seq} pairing {pairing.get('id')}: expected 2 teams, got {len(teams)}, skipped",
-                    )
-                    round_pairings_skipped += 1
-                    continue
-
-                sides: dict[str, str] = {}
-                for team_entry in teams:
-                    side = _normalize_side(team_entry.get("side"))
-                    if side is None or side in sides:
-                        sides = {}
-                        break
-                    sides[side] = team_entry.get("team")
-                if "prop" not in sides or "opp" not in sides:
-                    _skip(
-                        report,
-                        f"Round {seq} pairing {pairing.get('id')}: unmappable sides (BP or bye), skipped",
-                    )
-                    round_pairings_skipped += 1
-                    continue
-
-                prop_team_id = team_by_url.get(sides["prop"])
-                opp_team_id = team_by_url.get(sides["opp"])
-                if prop_team_id is None or opp_team_id is None:
-                    _skip(
-                        report,
-                        f"Round {seq} pairing {pairing.get('id')}: team not found in imported set, skipped",
-                    )
-                    round_pairings_skipped += 1
-                    continue
-
-                venue_url = pairing.get("venue")
-                room = venue_name_by_url.get(venue_url) if venue_url else None
-
-                debate = Debate(
-                    round_id=round_id, prop_team_id=prop_team_id, opp_team_id=opp_team_id, room=room
-                )
-                session.add(debate)
-                session.flush()
-                report.debates += 1
-                round_debates_created += 1
-                logger.debug(
-                    "round %d debate id=%s: prop=%s opp=%s room=%r", seq, debate.id, prop_team_id, opp_team_id, room
-                )
-
-                judge_ids_on_panel: set[int] = set()
-                chair_judge_id: int | None = None
-                adjudicators = pairing.get("adjudicators")
-                if adjudicators:
-                    chair_url = adjudicators.get("chair")
-                    if chair_url:
-                        chair_judge_id = judge_by_url.get(chair_url)
-                        if chair_judge_id is not None:
-                            session.add(DebateJudge(debate_id=debate.id, judge_id=chair_judge_id, is_chair=True))
-                            judge_ids_on_panel.add(chair_judge_id)
-                    for panellist_url in adjudicators.get("panellists") or []:
-                        judge_id = judge_by_url.get(panellist_url)
-                        if judge_id is not None:
-                            if judge_id in judge_ids_on_panel:
-                                logger.warning(
-                                    "debate %s: judge id=%s listed as panellist but already on panel "
-                                    "(e.g. chair) — would violate uniq(debate_id, judge_id), skipping duplicate",
-                                    debate.id,
-                                    judge_id,
-                                )
-                                continue
-                            session.add(DebateJudge(debate_id=debate.id, judge_id=judge_id))
-                            judge_ids_on_panel.add(judge_id)
-                    for trainee_url in adjudicators.get("trainees") or []:
-                        judge_id = judge_by_url.get(trainee_url)
-                        if judge_id is not None:
-                            if judge_id in judge_ids_on_panel:
-                                logger.warning(
-                                    "debate %s: judge id=%s listed as trainee but already on panel "
-                                    "— would violate uniq(debate_id, judge_id), skipping duplicate",
-                                    debate.id,
-                                    judge_id,
-                                )
-                                continue
-                            session.add(DebateJudge(debate_id=debate.id, judge_id=judge_id, is_trainee=True))
-                            judge_ids_on_panel.add(judge_id)
-                    session.flush()
-
-                if include_ballots:
-                    _import_ballots(
-                        session,
-                        client,
-                        seq,
-                        pairing["id"],
-                        debate,
-                        judge_by_url=judge_by_url,
-                        team_by_url=team_by_url,
-                        debater_by_url=debater_by_url,
-                        criterion_name_by_url=criterion_name_by_url,
-                        chair_judge_id=chair_judge_id,
-                        judge_ids_on_panel=judge_ids_on_panel,
-                        report=report,
-                    )
-        logger.info(
-            "round %d: %d debate(s) created, %d pairing(s) skipped", seq, round_debates_created, round_pairings_skipped
-        )
+        if detected_format == DebateFormat.BP:
+            _import_bp_pairings(
+                session,
+                client,
+                seq,
+                round_id,
+                pairings,
+                team_by_url=team_by_url,
+                judge_by_url=judge_by_url,
+                debater_by_url=debater_by_url,
+                venue_name_by_url=venue_name_by_url,
+                substantive_speakers=substantive_speakers,
+                include_ballots=include_ballots,
+                report=report,
+            )
+        else:
+            _import_two_team_pairings(
+                session,
+                client,
+                seq,
+                round_id,
+                pairings,
+                team_by_url=team_by_url,
+                judge_by_url=judge_by_url,
+                debater_by_url=debater_by_url,
+                criterion_name_by_url=criterion_name_by_url,
+                venue_name_by_url=venue_name_by_url,
+                include_ballots=include_ballots,
+                report=report,
+            )
 
     if starts_ats:
         tournament.date = min(starts_ats)

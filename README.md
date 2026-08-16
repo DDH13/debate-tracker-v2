@@ -1,8 +1,24 @@
 # Debate Tracker v2
 
-FastAPI + SQLModel backend for tracking debate tournaments (Asian/Australs/WSDC two-team
-format). Backed by Postgres (`DATABASE_URL` in `.env`); falls back to in-memory SQLite
-if unset.
+FastAPI + SQLModel backend for tracking debate tournaments. Two independent formats are
+supported, selected per-tournament via `Tournament.format`:
+
+- **Two-team** (Asian/Australs/WSDC, prop vs. opp): `/api/v1/rounds/{id}/debates`,
+  `/api/v1/debates/{id}/ballots`, and the `/api/v1/tournaments/{id}/speaker-tab`,
+  `team-standings`, `summary`, `side-stats`, `motion-stats` stats routes.
+- **BP** (British Parliamentary, 4 teams — OG/OO/CG/CO): `/api/v1/rounds/{id}/bp-debates`,
+  `/api/v1/bp-debates/{id}/ballots`, and the equivalent `/api/v1/tournaments/{id}/bp/...`
+  stats routes. A BP result is a ranking of the four teams (3/2/1/0 team points), not a
+  win/loss, so there's no `winner` field and no win-rate stats for BP. Elimination rounds
+  that report only advance/eliminate (no full ranking — common from quarterfinals
+  onward) get an `advanced` flag per team instead, visible on `bp-debates/{id}/result`
+  and rolled up into `team-standings`' `elim_advances`/`elim_eliminations`.
+
+Career profiles (`/api/v1/debaters/{id}/profile`, `/api/v1/judges/{id}/profile`) are
+two-team-only for now; `POST /api/v1/stats/refresh` reports how many BP tournaments were
+excluded via `bp_tournaments_excluded`.
+
+Backed by Postgres (`DATABASE_URL` in `.env`); falls back to in-memory SQLite if unset.
 
 ## Setup
 
@@ -84,10 +100,13 @@ curl -X POST localhost:8000/api/v1/tournaments/import \
 (paired with `TABBYCAT_BASE_URL`) to avoid passing it every time. Both are read by
 `pydantic-settings` from `.env`, so a typo'd variable name is silently ignored.
 
-Tabbycat's model is richer than this app's two-team (prop/opp) schema (e.g. BP-style
-4-team debates, multiple motions per round, arbitrary score criteria), so anything that
-doesn't map is skipped rather than aborting the import — check the response's `skipped`
-list. Importing is a one-shot operation: there's no `tabbycat_id` column to make it
+The importer detects two-team vs. BP automatically (by reading the tournament's
+`debate_rules__teams_in_debate` preference, or by inferring from the first round's
+pairing size if that isn't reachable) and populates the matching schema — check the
+response's `format` field. Tabbycat's model is still richer than either local schema
+(e.g. multiple motions per round, arbitrary score criteria), so anything that doesn't
+map is skipped rather than aborting the import — check the response's `skipped` list.
+Importing is a one-shot operation: there's no `tabbycat_id` column to make it
 idempotent, so re-importing the same slug raises a 409.
 
 ### Caching Tabbycat responses

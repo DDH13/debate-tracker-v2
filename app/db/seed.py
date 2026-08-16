@@ -4,7 +4,16 @@ from sqlmodel import Session
 
 from app.models import (
     Ballot,
+    BPBallot,
+    BPBallotTeam,
+    BPDebate,
+    BPDebateJudge,
+    BPDebateTeam,
+    BPPosition,
+    BPSide,
+    BPSpeakerScore,
     Debate,
+    DebateFormat,
     DebateJudge,
     Debater,
     Institution,
@@ -244,4 +253,161 @@ def seed(session: Session) -> None:
             ]
         )
 
+    _seed_bp(session)
     session.commit()
+
+
+def _seed_bp(session: Session) -> None:
+    tournament = Tournament(
+        name="Sample BP Open", date=date(2024, 7, 1), slug="sample-bp-open", format=DebateFormat.BP
+    )
+    session.add(tournament)
+    session.flush()
+
+    institutions = [
+        Institution(name="University E", code="UE"),
+        Institution(name="University F", code="UF"),
+        Institution(name="University G", code="UG"),
+        Institution(name="University H", code="UH"),
+    ]
+    session.add_all(institutions)
+    session.flush()
+
+    teams = [
+        Team(tournament_id=tournament.id, name="Team OG", institution_id=institutions[0].id),
+        Team(tournament_id=tournament.id, name="Team OO", institution_id=institutions[1].id),
+        Team(tournament_id=tournament.id, name="Team CG", institution_id=institutions[2].id),
+        Team(tournament_id=tournament.id, name="Team CO", institution_id=institutions[3].id),
+    ]
+    session.add_all(teams)
+    session.flush()
+
+    debaters = [
+        Debater(full_name="Erin Ellis", first_name="Erin", last_name="Ellis", institution_id=institutions[0].id),
+        Debater(full_name="Evan Ellis", first_name="Evan", last_name="Ellis", institution_id=institutions[0].id),
+        Debater(full_name="Fay Ford", first_name="Fay", last_name="Ford", institution_id=institutions[1].id),
+        Debater(full_name="Finn Ford", first_name="Finn", last_name="Ford", institution_id=institutions[1].id),
+        Debater(full_name="Gail Grant", first_name="Gail", last_name="Grant", institution_id=institutions[2].id),
+        Debater(full_name="Gus Grant", first_name="Gus", last_name="Grant", institution_id=institutions[2].id),
+        Debater(full_name="Hana Hill", first_name="Hana", last_name="Hill", institution_id=institutions[3].id),
+        Debater(full_name="Huck Hill", first_name="Huck", last_name="Hill", institution_id=institutions[3].id),
+    ]
+    session.add_all(debaters)
+    session.flush()
+
+    session.add_all(
+        [
+            TeamMember(team_id=teams[0].id, debater_id=debaters[0].id),
+            TeamMember(team_id=teams[0].id, debater_id=debaters[1].id),
+            TeamMember(team_id=teams[1].id, debater_id=debaters[2].id),
+            TeamMember(team_id=teams[1].id, debater_id=debaters[3].id),
+            TeamMember(team_id=teams[2].id, debater_id=debaters[4].id),
+            TeamMember(team_id=teams[2].id, debater_id=debaters[5].id),
+            TeamMember(team_id=teams[3].id, debater_id=debaters[6].id),
+            TeamMember(team_id=teams[3].id, debater_id=debaters[7].id),
+        ]
+    )
+
+    judge = Judge(full_name="Ivy Iyer", first_name="Ivy", last_name="Iyer", email="ivy@judges.org")
+    session.add(judge)
+    session.flush()
+
+    round_1 = Round(tournament_id=tournament.id, seq=1, name="Round 1")
+    session.add(round_1)
+    session.flush()
+
+    session.add(
+        Motion(
+            round_id=round_1.id,
+            text="This House Would prioritize climate adaptation over mitigation.",
+        )
+    )
+
+    bp_debate = BPDebate(round_id=round_1.id, room="Room 201")
+    session.add(bp_debate)
+    session.flush()
+
+    session.add_all(
+        [
+            BPDebateTeam(bp_debate_id=bp_debate.id, team_id=teams[0].id, side=BPSide.OG, rank=1, points=3),
+            BPDebateTeam(bp_debate_id=bp_debate.id, team_id=teams[1].id, side=BPSide.OO, rank=4, points=0),
+            BPDebateTeam(bp_debate_id=bp_debate.id, team_id=teams[2].id, side=BPSide.CG, rank=2, points=2),
+            BPDebateTeam(bp_debate_id=bp_debate.id, team_id=teams[3].id, side=BPSide.CO, rank=3, points=1),
+        ]
+    )
+    session.add(BPDebateJudge(bp_debate_id=bp_debate.id, judge_id=judge.id, is_chair=True))
+    session.flush()
+
+    ballot = BPBallot(bp_debate_id=bp_debate.id, judge_id=judge.id)
+    session.add(ballot)
+    session.flush()
+
+    session.add_all(
+        [
+            BPBallotTeam(bp_ballot_id=ballot.id, side=BPSide.OG, rank=1),
+            BPBallotTeam(bp_ballot_id=ballot.id, side=BPSide.OO, rank=4),
+            BPBallotTeam(bp_ballot_id=ballot.id, side=BPSide.CG, rank=2),
+            BPBallotTeam(bp_ballot_id=ballot.id, side=BPSide.CO, rank=3),
+        ]
+    )
+
+    session.add_all(
+        [
+            BPSpeakerScore(
+                bp_ballot_id=ballot.id,
+                debater_id=debaters[0].id,
+                side=BPSide.OG,
+                position=BPPosition.FIRST,
+                final_score=76.0,
+            ),
+            BPSpeakerScore(
+                bp_ballot_id=ballot.id,
+                debater_id=debaters[1].id,
+                side=BPSide.OG,
+                position=BPPosition.SECOND,
+                final_score=75.0,
+            ),
+            BPSpeakerScore(
+                bp_ballot_id=ballot.id,
+                debater_id=debaters[2].id,
+                side=BPSide.OO,
+                position=BPPosition.FIRST,
+                final_score=70.0,
+            ),
+            BPSpeakerScore(
+                bp_ballot_id=ballot.id,
+                debater_id=debaters[3].id,
+                side=BPSide.OO,
+                position=BPPosition.SECOND,
+                final_score=69.5,
+            ),
+            BPSpeakerScore(
+                bp_ballot_id=ballot.id,
+                debater_id=debaters[4].id,
+                side=BPSide.CG,
+                position=BPPosition.FIRST,
+                final_score=74.0,
+            ),
+            BPSpeakerScore(
+                bp_ballot_id=ballot.id,
+                debater_id=debaters[5].id,
+                side=BPSide.CG,
+                position=BPPosition.SECOND,
+                final_score=73.5,
+            ),
+            BPSpeakerScore(
+                bp_ballot_id=ballot.id,
+                debater_id=debaters[6].id,
+                side=BPSide.CO,
+                position=BPPosition.FIRST,
+                final_score=72.0,
+            ),
+            BPSpeakerScore(
+                bp_ballot_id=ballot.id,
+                debater_id=debaters[7].id,
+                side=BPSide.CO,
+                position=BPPosition.SECOND,
+                final_score=71.5,
+            ),
+        ]
+    )

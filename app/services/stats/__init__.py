@@ -1,3 +1,18 @@
+from app.services.stats.bp import (
+    BPMotionStat,
+    BPSideStats,
+    BPSpeakerTab,
+    BPTeamStanding,
+    BPTournamentSummary,
+    bp_motion_stats,
+    bp_participation,
+    bp_points_for_rank,
+    bp_round_scores,
+    bp_side_stats,
+    bp_speaker_tab,
+    bp_team_standings,
+    bp_tournament_summary,
+)
 from app.services.stats.debater import HeadToHeadRecord, head_to_head
 from app.services.stats.judge import JudgeSentiment, judge_sentiment
 from app.services.stats.profiles import (
@@ -24,6 +39,19 @@ from app.services.stats.tournament import (
 )
 
 __all__ = [
+    "BPMotionStat",
+    "BPSideStats",
+    "BPSpeakerTab",
+    "BPTeamStanding",
+    "BPTournamentSummary",
+    "bp_motion_stats",
+    "bp_participation",
+    "bp_points_for_rank",
+    "bp_round_scores",
+    "bp_side_stats",
+    "bp_speaker_tab",
+    "bp_team_standings",
+    "bp_tournament_summary",
     "HeadToHeadRecord",
     "head_to_head",
     "JudgeSentiment",

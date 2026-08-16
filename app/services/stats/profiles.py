@@ -4,11 +4,12 @@ import time
 from datetime import datetime, timezone
 from statistics import quantiles
 
-from sqlmodel import Session, SQLModel, select
+from sqlmodel import Session, SQLModel, func, select
 
 from app.models import (
     Ballot,
     Debate,
+    DebateFormat,
     Debater,
     DebaterProfile,
     Institution,
@@ -31,6 +32,7 @@ class RefreshResult(SQLModel):
     judge_profiles: int
     computed_at: datetime
     duration_ms: int
+    bp_tournaments_excluded: int
 
 
 class GlobalDistribution(SQLModel):
@@ -68,6 +70,10 @@ def refresh_profiles(session: Session) -> RefreshResult:
     one transaction, mirroring v1's `initializeAllDebaterProfiles`."""
     start = time.monotonic()
     computed_at = datetime.now(timezone.utc)
+
+    bp_tournaments_excluded = session.exec(
+        select(func.count()).select_from(Tournament).where(Tournament.format == DebateFormat.BP)
+    ).one()
 
     debater_aggregates = debater_stats.compute_debater_aggregates(session)
     judge_aggregates = judge_stats.compute_judge_aggregates(session)
@@ -185,6 +191,7 @@ def refresh_profiles(session: Session) -> RefreshResult:
         judge_profiles=judge_count,
         computed_at=computed_at,
         duration_ms=duration_ms,
+        bp_tournaments_excluded=bp_tournaments_excluded,
     )
 
 

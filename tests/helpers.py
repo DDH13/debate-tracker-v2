@@ -278,3 +278,65 @@ def build_tournament(
         "prelim_rounds": prelim_round_records,
         "elim_rounds": elim_round_records,
     }
+
+
+BP_SIDES = ["og", "oo", "cg", "co"]
+
+
+def _build_bp_debate_scaffold(client: TestClient, *, slug: str = "bp-cup") -> dict:
+    tournament = client.post(
+        "/api/v1/tournaments", json={"name": "BP Cup", "slug": slug, "format": "bp"}
+    ).json()
+
+    teams = []
+    for side in BP_SIDES:
+        team = client.post(
+            f"/api/v1/tournaments/{tournament['id']}/teams", json={"name": f"Team {side.upper()}"}
+        ).json()
+        debaters = [
+            client.post("/api/v1/debaters", json={"full_name": f"{side.upper()} Speaker {i}"}).json()
+            for i in range(1, 3)
+        ]
+        for debater in debaters:
+            client.post(f"/api/v1/teams/{team['id']}/members", json={"debater_id": debater["id"]})
+        teams.append({"team": team, "debaters": debaters, "side": side})
+
+    round_ = client.post(f"/api/v1/tournaments/{tournament['id']}/rounds", json={"seq": 1}).json()
+    debate = client.post(
+        f"/api/v1/rounds/{round_['id']}/bp-debates",
+        json={"teams": [{"team_id": t["team"]["id"], "side": t["side"]} for t in teams]},
+    ).json()
+
+    judges = [
+        client.post("/api/v1/judges", json={"full_name": f"Judge {i}"}).json() for i in range(1, 3)
+    ]
+    for judge in judges:
+        resp = client.post(f"/api/v1/bp-debates/{debate['id']}/judges", json={"judge_id": judge["id"]})
+        assert resp.status_code == 201, resp.text
+
+    return {
+        "tournament": tournament,
+        "teams": teams,
+        "round": round_,
+        "debate": debate,
+        "judges": judges,
+    }
+
+
+def _bp_score_sheet(teams: list[dict], rank_by_side: dict[str, int]) -> tuple[list[dict], list[dict]]:
+    """Returns `(rankings, scores)` for a BP ballot. `rank_by_side` maps side -> 1..4;
+    higher-ranked sides get higher (but still valid, half-point) speaker scores."""
+    rankings = [{"side": t["side"], "rank": rank_by_side[t["side"]]} for t in teams]
+    scores = []
+    for t in teams:
+        base = 80.0 - rank_by_side[t["side"]] * 2
+        for position, debater in enumerate(t["debaters"], start=1):
+            scores.append(
+                {
+                    "debater_id": debater["id"],
+                    "side": t["side"],
+                    "position": position,
+                    "final_score": base - (position - 1) * 0.5,
+                }
+            )
+    return rankings, scores

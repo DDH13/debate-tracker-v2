@@ -3,6 +3,8 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import Field, Relationship, SQLModel
 
+from app.models.enums import DebateFormat
+
 if TYPE_CHECKING:
     from app.models.round import Round
     from app.models.team import Team
@@ -14,6 +16,7 @@ class TournamentBase(SQLModel):
     base_url: str | None = None
     slug: str = Field(unique=True, index=True)
     date: date | None = None
+    format: DebateFormat = DebateFormat.TWO_TEAM
 
 
 class Tournament(TournamentBase, table=True):
@@ -45,3 +48,4 @@ class TournamentUpdate(SQLModel):
     slug: str | None = None
     base_url: str | None = None
     date: date | None = None
+    format: DebateFormat | None = None

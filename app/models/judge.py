@@ -7,6 +7,8 @@ from app.models.participant import ParticipantBase
 
 if TYPE_CHECKING:
     from app.models.ballot import Ballot
+    from app.models.bp_ballot import BPBallot
+    from app.models.bp_debate_judge import BPDebateJudge
     from app.models.debate_judge import DebateJudge
 
 
@@ -21,6 +23,8 @@ class Judge(JudgeBase, table=True):
     institution: Institution | None = Relationship(back_populates="judges")
     debate_links: list["DebateJudge"] = Relationship(back_populates="judge")
     ballots: list["Ballot"] = Relationship(back_populates="judge")
+    bp_debate_links: list["BPDebateJudge"] = Relationship(back_populates="judge")
+    bp_ballots: list["BPBallot"] = Relationship(back_populates="judge")
 
 
 class JudgeCreate(JudgeBase):
