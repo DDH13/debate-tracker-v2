@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     tabbycat_api_key: str | None = None
     log_level: str = "DEBUG"
     import_trace: bool = False
+    tabbycat_cache_dir: str | None = None
 
 
 settings = Settings()

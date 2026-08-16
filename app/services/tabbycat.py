@@ -5,11 +5,14 @@ don't fit (BP-style debates, extra motions, unmatched score criteria, etc.) are 
 rather than aborting the whole import; every skip is recorded on ``ImportReport.skipped``.
 """
 
+import hashlib
+import json
 import logging
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
+from pathlib import Path
 from typing import NamedTuple
 
 import httpx
@@ -132,12 +135,14 @@ class _TabbycatClient:
         api_key: str | None = None,
         *,
         http_client: httpx.Client | None = None,
+        cache_dir: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.slug = slug
         self._headers = {"Authorization": f"Token {api_key}"} if api_key else {}
         self._client = http_client or httpx.Client(timeout=30.0)
         self._owns_client = http_client is None
+        self._cache_dir = Path(cache_dir) / slug if cache_dir else None
 
     def close(self) -> None:
         if self._owns_client:
@@ -146,7 +151,17 @@ class _TabbycatClient:
     def url(self, path: str) -> str:
         return f"{self.base_url}{path}"
 
+    def _cache_path(self, url: str) -> Path:
+        digest = hashlib.sha256(url.encode()).hexdigest()
+        return self._cache_dir / f"{digest}.json"
+
     def get(self, url: str) -> dict:
+        if self._cache_dir is not None:
+            cache_path = self._cache_path(url)
+            if cache_path.exists():
+                logger.debug("cache hit for GET %s -> %s", url, cache_path)
+                return json.loads(cache_path.read_text())
+
         start = time.perf_counter()
         response = self._client.get(url, headers=self._headers)
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -167,7 +182,15 @@ class _TabbycatClient:
                 status_code=response.status_code,
             )
         logger.debug("GET %s -> %s in %.0fms (%d bytes)", url, response.status_code, elapsed_ms, len(response.content))
-        return response.json()
+        data = response.json()
+
+        if self._cache_dir is not None:
+            cache_path = self._cache_path(url)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(data))
+            logger.debug("cached GET %s -> %s", url, cache_path)
+
+        return data
 
     def get_list(self, url: str) -> list:
         items: list = []
@@ -485,7 +508,13 @@ def _run_import(
     *,
     report_sink: list[ImportReport] | None = None,
 ) -> ImportReport:
-    logger.info("import start slug=%s base_url=%s include_ballots=%s", slug, base_url, include_ballots)
+    logger.info(
+        "import start slug=%s base_url=%s include_ballots=%s cache_dir=%s",
+        slug,
+        base_url,
+        include_ballots,
+        client._cache_dir or "(disabled)",
+    )
     existing = session.exec(select(Tournament).where(Tournament.slug == slug)).first()
     if existing is not None:
         raise TournamentAlreadyExists(slug)
@@ -936,7 +965,7 @@ def import_tournament(
     api_key = api_key or settings.tabbycat_api_key
     owns_session = session is None
     active_session = session or Session(engine)
-    client = _TabbycatClient(base_url, slug, api_key)
+    client = _TabbycatClient(base_url, slug, api_key, cache_dir=settings.tabbycat_cache_dir)
     sink: list[ImportReport] = []
     try:
         report = _run_import(active_session, client, base_url, slug, include_ballots, report_sink=sink)

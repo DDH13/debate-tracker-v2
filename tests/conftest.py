@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.main import app
 
 settings.seed_on_startup = False
+settings.tabbycat_cache_dir = None  # tests must always hit the respx-mocked client fresh
 
 
 @pytest.fixture(name="session")
