@@ -18,6 +18,22 @@ Set `DATABASE_URL` in `.env`, e.g.:
 DATABASE_URL=postgresql+psycopg://<user>@localhost:5432/debate_tracker_v2
 ```
 
+## Configuration
+
+All settings are read from `.env` via `pydantic-settings` (`app/core/config.py`). A
+typo'd variable name is silently ignored rather than erroring, so double-check spelling.
+
+| Variable              | Default    | Purpose                                                         |
+|------------------------|------------|------------------------------------------------------------------|
+| `DATABASE_URL`         | in-memory SQLite | Postgres (or other SQLAlchemy) connection string.           |
+| `SQL_ECHO`             | `false`    | Log every SQL statement SQLAlchemy executes.                     |
+| `SEED_ON_STARTUP`      | `false`    | Run the sample-data seed automatically when the app starts.      |
+| `LOG_LEVEL`            | `DEBUG`    | Root logging level.                                               |
+| `TABBYCAT_BASE_URL`    | unset      | Default Tabbycat instance URL, so it doesn't need to be passed per import request. |
+| `TABBYCAT_API_KEY`     | unset      | Default Tabbycat API token, paired with `TABBYCAT_BASE_URL`.     |
+| `TABBYCAT_CACHE_DIR`   | unset      | Directory for caching Tabbycat API responses. See [caching](#caching-tabbycat-responses) below. |
+| `IMPORT_TRACE`         | `false`    | Verbose per-record tracing during a tournament import.            |
+
 ## Run
 
 ```bash
@@ -40,6 +56,20 @@ connections hang forever instead of failing.
 make test
 ```
 
+## Database management
+
+```bash
+make db-create    # create tables (SQLModel.metadata.create_all)
+make db-seed      # load sample data (app/db/seed.py)
+make db-drop      # drop all tables — prompts for confirmation
+make db-truncate  # delete all rows, keep schema — prompts for confirmation
+make db-reset     # drop + create + seed — prompts for confirmation
+```
+
+`db-drop`, `db-truncate`, and `db-reset` are destructive and require typing `yes` at a
+prompt before they run. All targets shell out to `scripts/db.py` against whatever
+`DATABASE_URL` is configured.
+
 ## Importing a Tabbycat tournament
 
 Real tournaments can be imported from a [Tabbycat](https://tabbycat.readthedocs.io) instance:
@@ -59,3 +89,21 @@ Tabbycat's model is richer than this app's two-team (prop/opp) schema (e.g. BP-s
 doesn't map is skipped rather than aborting the import — check the response's `skipped`
 list. Importing is a one-shot operation: there's no `tabbycat_id` column to make it
 idempotent, so re-importing the same slug raises a 409.
+
+### Caching Tabbycat responses
+
+Set `TABBYCAT_CACHE_DIR` in `.env` to cache every upstream GET response to disk, keyed
+by URL under a per-slug subfolder:
+
+```
+TABBYCAT_CACHE_DIR=.cache/tabbycat
+```
+
+With it set, re-running an import for the same slug (e.g. after `make db-reset`) replays
+from disk instead of re-hitting the Tabbycat instance — useful for iterating on the
+importer locally without risking the upstream site's rate limits.
+
+- **Off**: leave `TABBYCAT_CACHE_DIR` unset (the default) — every import hits Tabbycat directly.
+- **On**: set `TABBYCAT_CACHE_DIR` to a directory path and restart the app.
+- **Force a fresh pull**: delete the cache dir, or just the tournament's slug subfolder
+  inside it, then re-run the import.
