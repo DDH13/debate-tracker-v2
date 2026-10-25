@@ -83,6 +83,46 @@ is covered automatically, and a new public write must be added there deliberatel
   routers get `require_board_for_writes` (reads open, writes board-only), and the
   `app/api/v1/endpoints/admin/` package (mounted at `/admin`) gets `require_board`. New
   management endpoints go in that package so they inherit it.
+- Management console (all under `app/api/v1/endpoints/admin/`, board-only):
+  - `app/api/crud.py` — `add_crud_routes()` generates POST / GET list / GET / PATCH / DELETE
+    for a plain admin resource from its models, a `ListParams` filter subclass (each field is
+    an equality filter), `parents` (FK fields 404-checked before insert/update) and an
+    optional `on_save` hook. Use it for new plain-CRUD tables; hand-write anything that
+    computes or touches several tables (see `convert_lead` in `admin/outreach.py`). PATCH
+    rejects explicit nulls on NOT NULL columns with 422 instead of letting them 409.
+  - Member schools: `Membership` (one per school per calendar year), `SchoolContact`,
+    `SchoolAchievement`, `SchoolParticipation` (manual history for tournaments that were
+    never imported), `Feedback` (optional institution / tournament / judge subject) and
+    `OutreachLead`. `app/services/schools.py` derives membership standing
+    (member / lapsed / former / never + `irregular`) and builds the schools list and a
+    school's detail; tournament history merges imported Team → Tournament rows with the
+    manual ones.
+  - `Institution` has `kind` and `district` but deliberately **no notes column**:
+    `InstitutionPublic` is served by the public `GET /institutions`, so anything internal
+    goes on the admin-only tables.
+- `app/services/registrations.py` + `scripts/import_registrations.py` (`make
+  import-registrations`) — the yearly Google Form registration import. Headers are matched
+  by prefix so small form edits don't break it. Resolution order per row: explicit id in the
+  mapping → exact `institution_key` match → `"new"` in the mapping → new institution if
+  nothing is even similar → otherwise *ambiguous* (blocks the import). The exact match has
+  to come before `"new"`, or a re-run would try to recreate the schools the first run made.
+  Dry runs do the whole import and roll back; re-runs are no-ops (fill-blanks only). Tests
+  use a fake CSV with the real form headers — never commit the real sheet (student PII).
+- Contacts have a coarse `role` (incl. `student`) plus a free-text `title`, and secondary
+  email/phone. Membership `payment_proof_url` / `request_letter_url` are validated to
+  http(s) (`http_url` in `app/models/membership.py`) because the console renders them as
+  links.
+- **New FKs to institution / judge / tournament need three things**: repoint them in the
+  matching merge in `app/services/merge.py`, count them in the `delete_*` 409 guard (or make
+  them `ondelete="SET NULL"` when the row should outlive the parent — feedback and
+  achievements do this for tournaments and judges, outreach leads for institutions), and a
+  test. `merge_institutions` refuses (409) when two of the merged schools hold a membership
+  for the same year rather than dropping one.
+- Schema changes: there are no migrations. `create_all` adds new tables on startup but never
+  new columns, so a new column on an existing table needs a dev DB reset or a one-off
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`. Enum columns are native Postgres enums whose
+  labels are the member **names** (`SCHOOL`, not `school`), so an ALTER must create the type
+  with those labels first.
 - `app/core/config.py` — `pydantic-settings` config read from `.env` with `extra="ignore"`,
   so a typo'd env var name is silently ignored rather than erroring.
 

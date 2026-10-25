@@ -15,9 +15,15 @@ from app.models import (
     DebateJudge,
     Debater,
     DebaterProfile,
+    Feedback,
     Institution,
     Judge,
     JudgeProfile,
+    Membership,
+    OutreachLead,
+    SchoolAchievement,
+    SchoolContact,
+    SchoolParticipation,
     SpeakerScore,
     Team,
     TeamMember,
@@ -144,6 +150,7 @@ def merge_judges(session: Session, source_id: int, target_id: int) -> Judge:
         session.exec(
             update(DebateJudge).where(DebateJudge.judge_id == source_id).values(judge_id=target_id)
         )
+        session.exec(update(Feedback).where(Feedback.judge_id == source_id).values(judge_id=target_id))
         _fill_null_fields(target, source, _PERSON_FIELDS)
         session.add(target)
         for profile in session.exec(select(JudgeProfile).where(JudgeProfile.judge_id == source_id)).all():
@@ -168,16 +175,38 @@ def merge_institutions(session: Session, target_id: int, source_ids: list[int]) 
     target = _load(session, Institution, target_id)
     sources = [_load(session, Institution, source_id) for source_id in unique_sources]
 
+    # Two membership rows for the same year can't both survive (one per school per year),
+    # and silently dropping one would lose fee/payment details, so refuse instead.
+    seen_years: dict[int, int] = {}
+    for membership in session.exec(
+        select(Membership).where(Membership.institution_id.in_([target_id, *unique_sources]))
+    ).all():
+        other = seen_years.setdefault(membership.year, membership.institution_id)
+        if other != membership.institution_id:
+            raise MergeConflict(
+                f"Institutions {other} and {membership.institution_id} both have a "
+                f"{membership.year} membership; delete or edit one before merging"
+            )
+
     try:
-        for model in (Team, Debater, Judge):
+        for model in (
+            Team,
+            Debater,
+            Judge,
+            Membership,
+            SchoolContact,
+            SchoolAchievement,
+            SchoolParticipation,
+            Feedback,
+            OutreachLead,
+        ):
             session.exec(
                 update(model)
                 .where(model.institution_id.in_(unique_sources))
                 .values(institution_id=target_id)
             )
         for source in sources:
-            if target.code is None and source.code is not None:
-                target.code = source.code
+            _fill_null_fields(target, source, ("code", "kind", "district"))
         session.add(target)
         session.flush()
         for source in sources:

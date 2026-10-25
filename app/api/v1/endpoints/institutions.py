@@ -5,11 +5,16 @@ from sqlmodel import SQLModel, func, select
 from app.api.deps import SessionDep, get_or_404, merge_errors
 from app.models import (
     Debater,
+    Feedback,
     Institution,
     InstitutionCreate,
     InstitutionPublic,
     InstitutionUpdate,
     Judge,
+    Membership,
+    SchoolAchievement,
+    SchoolContact,
+    SchoolParticipation,
     Team,
 )
 from app.services import institutions as institution_service
@@ -99,23 +104,29 @@ def update_institution(
 def delete_institution(institution_id: int, session: SessionDep) -> None:
     institution = get_or_404(session, Institution, institution_id)
 
-    team_count = session.exec(
-        select(func.count()).select_from(Team).where(Team.institution_id == institution_id)
-    ).one()
-    debater_count = session.exec(
-        select(func.count()).select_from(Debater).where(Debater.institution_id == institution_id)
-    ).one()
-    judge_count = session.exec(
-        select(func.count()).select_from(Judge).where(Judge.institution_id == institution_id)
-    ).one()
-
-    if team_count or debater_count or judge_count:
+    # Outreach leads aren't listed: their link is ON DELETE SET NULL and they keep the
+    # school name, so they survive the institution going away.
+    references = {
+        "team(s)": Team,
+        "debater(s)": Debater,
+        "judge(s)": Judge,
+        "membership(s)": Membership,
+        "contact(s)": SchoolContact,
+        "achievement(s)": SchoolAchievement,
+        "participation record(s)": SchoolParticipation,
+        "feedback item(s)": Feedback,
+    }
+    counts = {
+        label: session.exec(
+            select(func.count()).select_from(model).where(model.institution_id == institution_id)
+        ).one()
+        for label, model in references.items()
+    }
+    in_use = [f"{n} {label}" for label, n in counts.items() if n]
+    if in_use:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Cannot delete institution: referenced by {team_count} team(s), "
-                f"{debater_count} debater(s), {judge_count} judge(s)"
-            ),
+            detail=f"Cannot delete institution: referenced by {', '.join(in_use)}",
         )
 
     session.delete(institution)

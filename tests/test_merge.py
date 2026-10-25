@@ -250,7 +250,13 @@ def test_merge_institutions_reassigns_everything_and_copies_code(
         json={"target_id": target["id"], "source_ids": [source_a["id"], source_b["id"]]},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"id": target["id"], "name": "Target U", "code": "SA"}  # first non-null code
+    assert resp.json() == {  # first non-null code
+        "id": target["id"],
+        "name": "Target U",
+        "code": "SA",
+        "kind": None,
+        "district": None,
+    }
 
     assert client.get(f"{API}/teams/{team['id']}").json()["institution_id"] == target["id"]
     assert client.get(f"{API}/debaters/{debater['id']}").json()["institution_id"] == target["id"]

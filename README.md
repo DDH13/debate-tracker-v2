@@ -87,6 +87,53 @@ reverse proxy in production). If they're ever split across sites, set
 `SESSION_COOKIE_SAMESITE=none`, `SESSION_COOKIE_SECURE=true`, an explicit `CORS_ORIGINS`
 list, and add `allow_credentials=True` to the CORS middleware in `app/main.py`.
 
+## Member schools and outreach
+
+Board-only endpoints under `/api/v1/admin`, behind the [console sign-in](#authentication):
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /admin/schools?year=` | Every institution with its membership standing for `year` (default: this year): `member`, `lapsed` (member last year, not this), `former`, `never`, plus `irregular` when they've missed a year since first joining. Also the year's membership, tournament count / latest tournament, primary contact and open feedback count. |
+| `GET /admin/schools/{id}?year=` | One school: the summary above plus memberships, contacts, achievements, feedback, outreach leads and tournament history (imported tournaments merged with manual entries). |
+| `/admin/memberships`, `/admin/school-contacts`, `/admin/school-achievements`, `/admin/school-participations`, `/admin/feedback`, `/admin/outreach` | CRUD (`POST`, `GET` with filters, `GET/PATCH/DELETE /{id}`). One membership per school per year (409 on a duplicate); one primary contact per school. |
+| `POST /admin/outreach/{id}/convert` | Turns a lead into a member school in one step: links or finds (by name key) or creates the institution, adds the year's membership (reusing an existing one), and adds the lead's contact person. |
+
+Fees are LKR decimals and come back as strings (`"7500.00"`). Institutions also have public
+`kind` (school / university / other) and `district` fields.
+
+## Importing a year's school registrations
+
+Schools register each year through the DC's Google Form. Export the responses tab as CSV
+(File → Download → CSV) and import it — a **dry run by default**:
+
+```bash
+make import-registrations CSV=reg-2025.csv YEAR=2025
+```
+
+Each row resolves to an institution by exact name key (`St. Joseph's` = `St Josephs`). Rows
+with only *similar* matches are listed as AMBIGUOUS with suggestions and block the import —
+fuzzy matches are never applied automatically. Decide them in a JSON mapping file
+(`<institution id>` to link, `"new"` to create) and apply:
+
+```json
+{"WESLEY COLLEGE COLOMBO": 108, "Gateway College, Kandy": "new"}
+```
+
+```bash
+make import-registrations CSV=reg-2025.csv YEAR=2025 MAP=map-2025.json ARGS="--paid-on-submission --apply"
+```
+
+Per school this creates the year's membership (registration date, payment proof and request
+letter links; several submissions for one school collapse into one membership), adds each
+representative as a contact (WhatsApp numbers normalized to `+94…`, a teacher in charge
+preferred as primary), and closes the school's open outreach leads. `--fee 5000` records a
+fee; `--paid-on-submission` marks memberships paid on the submission date when a payment
+proof is attached. Re-running the same sheet changes nothing, and existing values are only
+ever filled in, never overwritten.
+
+Keep the CSV and mapping file out of the repo — they hold students' contact details, and the
+mapping's ids are specific to one database.
+
 ## Database management
 
 ```bash
