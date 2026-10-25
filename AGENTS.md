@@ -164,6 +164,20 @@ is covered automatically, and a new public write must be added there deliberatel
     a workshop with ledger rows can't be deleted (`before_delete`). `Feedback.workshop_id`
     and the task links are `SET NULL`. `merge_institutions` combines two merged schools'
     attendance at one workshop into one row with the students added up.
+  - Tournament ops (`admin/tournament_ops.py`, `app/services/tournament_ops.py`) and the
+    judge registry (`admin/judges.py`, `app/services/judges.py`). **Admin data about
+    tournaments and judges goes in side tables** — `TournamentOps` (1:1 settings; no row =
+    defaults), `TournamentRegistration`, `JudgeRecord` (1:1), `JudgeAffiliation` — because
+    `TournamentPublic` / `JudgePublic` are served by the open API. Ops rows combine the
+    board's registrations with counts derived from the tab in grouped queries
+    (`_teams_by_school`, `_judges_by_school`; trainee seats don't count as judges
+    provided); overrides win, and a tournament with no imported teams reports fielded /
+    provided as `None` rather than 0. Judge involvement is computed live from `DebateJudge`
+    (so it's current right after an import), unlike the materialized `JudgeProfile`. Merges:
+    `merge_institutions` repoints registrations (409 when two merged schools registered for
+    the same tournament) and affiliations; `merge_judges` moves affiliations (dropping exact
+    duplicates) and the `JudgeRecord` (filling the target's blanks if it has one). Judge and
+    tournament deletes cascade to these tables; institution deletes are guarded.
 - `app/services/registrations.py` + `scripts/import_registrations.py` (`make
   import-registrations`) — the yearly Google Form registration import. Headers are matched
   by prefix so small form edits don't break it. Resolution order per row: explicit id in the

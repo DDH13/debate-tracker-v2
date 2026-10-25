@@ -157,3 +157,19 @@ class WorkshopMode(str, Enum):
     IN_PERSON = "in_person"
     ONLINE = "online"
     HYBRID = "hybrid"
+
+
+class JudgeLevel(str, Enum):
+    TRAINEE = "trainee"
+    PANELLIST = "panellist"
+    CHAIR = "chair"
+    ADJUDICATION_CORE = "adjudication_core"
+    CHIEF_ADJUDICATOR = "chief_adjudicator"
+
+
+class AffiliationRole(str, Enum):
+    STUDENT = "student"
+    ALUMNUS = "alumnus"
+    COACH = "coach"
+    TEACHER = "teacher"
+    OTHER = "other"

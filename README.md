@@ -176,6 +176,39 @@ A workshop's money is ordinary ledger income and expenses tagged with `workshop_
 transfers), so it also shows in the finance pages and CSV (`workshop` column). Feedback can
 be about a workshop, and a school's detail lists the workshops it attended.
 
+## Tournament operations and the judge registry
+
+Board-only under `/api/v1/admin`. Internal tournament and judge data live in admin-only side
+tables (`TournamentOps`, `TournamentRegistration`, `JudgeRecord`, `JudgeAffiliation`), never
+on `Tournament` / `Judge`, whose public models are served by the open API.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /admin/tournament-ops` | Every tournament (newest first) with schools, registrations, dropouts and judge shortfall totals. |
+| `GET /admin/tournaments/{id}/ops` | One row per school that registered or fielded teams: teams registered vs fielded, **dropouts**, judges required by the quota rule vs provided, **shortfall**, with overrides flagged; totals and the tournament's feedback. |
+| `PUT /admin/tournaments/{id}/ops-settings` | The quota rule (`teams_per_judge`: 1 judge per N teams, rounded up; default 2), `hosted_by_dc`, notes. |
+| `/admin/tournament-registrations` | CRUD (filters `tournament_id`, `institution_id`; one per school per tournament, 409). Teams registered, judges promised, dropout notes, and optional overrides for teams fielded, judges provided and judges required. |
+| `GET /admin/judges/registry?q=&level=&institution_id=` | Every judge with their level, affiliation count and involvement, most recently active first. Unpaginated. |
+| `GET /admin/judges/{id}/detail` | A judge's level and notes, affiliations, involvement, per-tournament history, materialized profile (if computed) and feedback. |
+| `PUT /admin/judges/{id}/record` | Sets the board's level (trainee → chief adjudicator), experience notes and notes. |
+| `/admin/judge-affiliations` | CRUD (filters `judge_id`, `institution_id`): a school, a connection (student, alumnus, coach, teacher, other) and years. |
+
+How the ops figures are derived:
+
+- **Teams fielded** = the school's teams in the imported tab; **judges provided** = distinct
+  judges from the school who sat on at least one panel of the tournament **not as a
+  trainee**. A registration's overrides replace either.
+- **Judges required** = ceil(teams fielded ÷ `teams_per_judge`), unless overridden. A school
+  that registered but fielded nobody owes no judges.
+- **Dropouts** = registered − fielded (never negative); **shortfall** = required − provided.
+- Until a tournament's tab is imported (it has no teams), fielded and provided are
+  *unknown*, not zero, so no dropouts or shortfalls are invented; the requirement then
+  comes from the registered teams.
+
+Judge involvement (tournaments, debates, prelims / elims, chairs, trainee panels, last
+tournament) is computed live from the imported panels; scores and dissent rates come from
+the materialized profiles and need `POST /stats/refresh`.
+
 ## Importing a year's school registrations
 
 Schools register each year through the DC's Google Form. Export the responses tab as CSV

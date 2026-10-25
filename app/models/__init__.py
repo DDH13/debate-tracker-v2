@@ -13,11 +13,13 @@ from app.models.debater import Debater, DebaterCreate, DebaterPublic, DebaterUpd
 from app.models.debater_profile import DebaterProfile, DebaterProfilePublic
 from app.models.enums import (
     AccountKind,
+    AffiliationRole,
     BillingCycle,
     ContactRole,
     FeedbackSentiment,
     FeedbackStatus,
     InstitutionKind,
+    JudgeLevel,
     LeadChannel,
     LeadStatus,
     PaymentMethod,
@@ -48,6 +50,15 @@ from app.models.institution import (
     InstitutionCreate,
     InstitutionPublic,
     InstitutionUpdate,
+)
+from app.models.judge_record import (
+    JudgeAffiliation,
+    JudgeAffiliationCreate,
+    JudgeAffiliationPublic,
+    JudgeAffiliationUpdate,
+    JudgeRecord,
+    JudgeRecordPublic,
+    JudgeRecordUpdate,
 )
 from app.models.judge import Judge, JudgeCreate, JudgePublic, JudgeUpdate
 from app.models.judge_profile import JudgeProfile, JudgeProfilePublic
@@ -108,6 +119,14 @@ from app.models.subscription import (
 from app.models.task import Task, TaskCreate, TaskPublic, TaskUpdate
 from app.models.team import Team, TeamCreate, TeamPublic, TeamUpdate
 from app.models.team_member import TeamMember, TeamMemberCreate, TeamMemberPublic
+from app.models.tournament_ops import (
+    TournamentOps,
+    TournamentOpsUpdate,
+    TournamentRegistration,
+    TournamentRegistrationCreate,
+    TournamentRegistrationPublic,
+    TournamentRegistrationUpdate,
+)
 from app.models.tournament import (
     Tournament,
     TournamentCreate,
@@ -333,4 +352,19 @@ __all__ = [
     "WorkshopFacilitatorCreate",
     "WorkshopFacilitatorPublic",
     "WorkshopFacilitatorUpdate",
+    "JudgeAffiliation",
+    "JudgeAffiliationCreate",
+    "JudgeAffiliationPublic",
+    "JudgeAffiliationUpdate",
+    "JudgeRecord",
+    "JudgeRecordPublic",
+    "JudgeRecordUpdate",
+    "TournamentOps",
+    "TournamentOpsUpdate",
+    "TournamentRegistration",
+    "TournamentRegistrationCreate",
+    "TournamentRegistrationPublic",
+    "TournamentRegistrationUpdate",
+    "AffiliationRole",
+    "JudgeLevel",
 ]

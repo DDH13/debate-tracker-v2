@@ -4,11 +4,13 @@ from app.api.v1.endpoints.admin import (
     board,
     feedback,
     finance,
+    judges,
     outreach,
     people,
     schools,
     squads,
     tasks,
+    tournament_ops,
     trips,
     users,
     workshops,
@@ -28,3 +30,5 @@ router.include_router(trips.router)
 router.include_router(board.router)
 router.include_router(tasks.router)
 router.include_router(workshops.router)
+router.include_router(tournament_ops.router)
+router.include_router(judges.router)

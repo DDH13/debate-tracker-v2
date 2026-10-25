@@ -30,6 +30,9 @@ from app.models import (
     TeamMember,
     Tournament,
     Transaction,
+    TournamentRegistration,
+    JudgeAffiliation,
+    JudgeRecord,
     WorkshopSchool,
 )
 from app.services.stats import core
@@ -141,6 +144,36 @@ def merge_debaters(session: Session, source_id: int, target_id: int) -> Debater:
     return target
 
 
+def _merge_judge_registry(session: Session, source_id: int, target_id: int) -> None:
+    """Moves the source judge's affiliations (dropping exact duplicates of the target's) and
+    board record (filling the target's blanks when it already has one)."""
+    target_affiliations = {
+        (a.institution_id, a.role, a.from_year, a.to_year)
+        for a in session.exec(select(JudgeAffiliation).where(JudgeAffiliation.judge_id == target_id)).all()
+    }
+    for affiliation in session.exec(select(JudgeAffiliation).where(JudgeAffiliation.judge_id == source_id)).all():
+        key = (affiliation.institution_id, affiliation.role, affiliation.from_year, affiliation.to_year)
+        if key in target_affiliations:
+            session.delete(affiliation)
+        else:
+            affiliation.judge_id = target_id
+            target_affiliations.add(key)
+            session.add(affiliation)
+
+    source_record = session.exec(select(JudgeRecord).where(JudgeRecord.judge_id == source_id)).first()
+    if source_record is None:
+        return
+    target_record = session.exec(select(JudgeRecord).where(JudgeRecord.judge_id == target_id)).first()
+    if target_record is None:
+        source_record.judge_id = target_id
+        session.add(source_record)
+    else:
+        _fill_null_fields(target_record, source_record, ("level", "experience_notes", "notes"))
+        session.add(target_record)
+        session.delete(source_record)
+    session.flush()
+
+
 def merge_judges(session: Session, source_id: int, target_id: int) -> Judge:
     if source_id == target_id:
         raise MergeInvalid("source_id and target_id must differ")
@@ -165,6 +198,7 @@ def merge_judges(session: Session, source_id: int, target_id: int) -> Judge:
             update(DebateJudge).where(DebateJudge.judge_id == source_id).values(judge_id=target_id)
         )
         session.exec(update(Feedback).where(Feedback.judge_id == source_id).values(judge_id=target_id))
+        _merge_judge_registry(session, source_id, target_id)
         _fill_null_fields(target, source, _PERSON_FIELDS)
         session.add(target)
         for profile in session.exec(select(JudgeProfile).where(JudgeProfile.judge_id == source_id)).all():
@@ -214,6 +248,20 @@ def merge_institutions(session: Session, target_id: int, source_ids: list[int]) 
     target = _load(session, Institution, target_id)
     sources = [_load(session, Institution, source_id) for source_id in unique_sources]
 
+    # Same for two registrations at one tournament: the counts can't be combined safely.
+    seen_tournaments: dict[int, int] = {}
+    for registration in session.exec(
+        select(TournamentRegistration).where(
+            TournamentRegistration.institution_id.in_([target_id, *unique_sources])
+        )
+    ).all():
+        other = seen_tournaments.setdefault(registration.tournament_id, registration.institution_id)
+        if other != registration.institution_id:
+            raise MergeConflict(
+                f"Institutions {other} and {registration.institution_id} are both registered for "
+                f"tournament {registration.tournament_id}; delete or edit one before merging"
+            )
+
     # Two membership rows for the same year can't both survive (one per school per year),
     # and silently dropping one would lose fee/payment details, so refuse instead.
     seen_years: dict[int, int] = {}
@@ -240,6 +288,8 @@ def merge_institutions(session: Session, target_id: int, source_ids: list[int]) 
             Feedback,
             OutreachLead,
             Transaction,
+            TournamentRegistration,
+            JudgeAffiliation,
         ):
             session.exec(
                 update(model)

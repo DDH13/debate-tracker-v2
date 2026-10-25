@@ -33,6 +33,8 @@ from app.models import (
     Team,
     Tournament,
 )
+from app.services.judges import AffiliatedJudge, school_affiliated_judges
+from app.services.tournament_ops import SchoolTournamentRow, school_tournament_record
 from app.services.workshops import SchoolWorkshop, school_workshops
 
 
@@ -95,6 +97,8 @@ class SchoolDetail(SQLModel):
     feedback: list[FeedbackPublic]
     outreach: list[OutreachLeadPublic]
     workshops: list[SchoolWorkshop]
+    tournament_record: list[SchoolTournamentRow]
+    affiliated_judges: list[AffiliatedJudge]
 
 
 def membership_standing(years: Iterable[int], year: int) -> MembershipStanding:
@@ -297,4 +301,6 @@ def school_detail(session: Session, institution: Institution, year: int) -> Scho
             for lead in rows(OutreachLead, OutreachLead.created_at.desc())
         ],
         workshops=school_workshops(session, institution_id),
+        tournament_record=school_tournament_record(session, institution_id),
+        affiliated_judges=school_affiliated_judges(session, institution_id),
     )

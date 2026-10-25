@@ -11,11 +11,13 @@ from app.models import (
     InstitutionPublic,
     InstitutionUpdate,
     Judge,
+    JudgeAffiliation,
     Membership,
     SchoolAchievement,
     SchoolContact,
     SchoolParticipation,
     Team,
+    TournamentRegistration,
     WorkshopSchool,
 )
 from app.services import institutions as institution_service
@@ -117,6 +119,8 @@ def delete_institution(institution_id: int, session: SessionDep) -> None:
         "participation record(s)": SchoolParticipation,
         "feedback item(s)": Feedback,
         "workshop attendance(s)": WorkshopSchool,
+        "tournament registration(s)": TournamentRegistration,
+        "judge affiliation(s)": JudgeAffiliation,
     }
     counts = {
         label: session.exec(
