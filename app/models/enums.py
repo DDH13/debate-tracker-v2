@@ -11,3 +11,8 @@ class SpeakerPosition(int, Enum):
     SECOND = 2
     THIRD = 3
     REPLY = 4
+
+
+class UserRole(str, Enum):
+    BOARD = "board"
+    VOLUNTEER = "volunteer"

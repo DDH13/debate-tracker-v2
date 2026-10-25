@@ -42,6 +42,12 @@ in-memory SQLite engine per test via the `session`/`client` fixtures in
 `tests/conftest.py` and override the `get_session` dependency — don't hit the real
 `app/db/session.py` engine from tests.
 
+`client` is signed in as a **board** user; use `anon_client` / `volunteer_client` for
+access tests. `tests/test_auth.py` enumerates every route from the OpenAPI schema (not
+`app.routes`, which nests included routers lazily) and asserts each write and each
+`/admin` route rejects anonymous (401) and volunteer (403) callers — so a new endpoint
+is covered automatically, and a new public write must be added there deliberately.
+
 ## Layout
 
 - `app/models/` — SQLModel table models. Each file typically defines the table model
@@ -69,6 +75,14 @@ in-memory SQLite engine per test via the `session`/`client` fixtures in
   same slug is not idempotent and raises `409`.
 - Static routes such as `/merge`, `/duplicates`, `/similar`, `/merge-info` must be declared
   **before** `/{id}` in their router, or the int path parameter claims them and returns 422.
+- Auth: `app/models/user.py` (`User`, `AuthSession`), `app/core/security.py` (argon2 via
+  `pwdlib`, token hashing), `app/services/auth.py` (create/resolve/revoke sessions), and
+  `app/api/v1/endpoints/auth.py`. Dependencies in `app/api/deps.py`: `CurrentUserDep`,
+  `require_board` / `BoardUserDep`, and `require_board_for_writes`. Access is set where
+  routers are included in `app/api/v1/router.py`, not per endpoint: the public resource
+  routers get `require_board_for_writes` (reads open, writes board-only), and the
+  `app/api/v1/endpoints/admin/` package (mounted at `/admin`) gets `require_board`. New
+  management endpoints go in that package so they inherit it.
 - `app/core/config.py` — `pydantic-settings` config read from `.env` with `extra="ignore"`,
   so a typo'd env var name is silently ignored rather than erroring.
 

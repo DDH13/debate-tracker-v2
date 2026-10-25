@@ -1,10 +1,14 @@
-.PHONY: dev test db-create db-seed db-drop db-truncate db-reset
+.PHONY: dev test user db-create db-seed db-drop db-truncate db-reset
 
 dev:
 	.venv/bin/gunicorn app.main:app -k uvicorn_worker.UvicornWorker -w 2 --reload
 
 test:
 	.venv/bin/pytest
+
+# make user EMAIL=chair@example.com NAME="Chair" [ROLE=board|volunteer]; prompts for the password.
+user:
+	PYTHONPATH=. .venv/bin/python scripts/create_user.py --email "$(EMAIL)" --name "$(NAME)" --role "$(or $(ROLE),board)"
 
 db-create:
 	PYTHONPATH=. .venv/bin/python scripts/db.py create

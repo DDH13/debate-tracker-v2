@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +17,11 @@ class Settings(BaseSettings):
     import_trace: bool = False
     tabbycat_cache_dir: str | None = None
     cors_origins: list[str] = ["*"]
+    session_cookie_name: str = "dt_session"
+    session_ttl_days: int = 14
+    # True in production (HTTPS). A split UI/API deployment also needs samesite="none".
+    session_cookie_secure: bool = False
+    session_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
 
 
 settings = Settings()

@@ -9,7 +9,7 @@ from app.models.debate import Debate, DebateCreate, DebatePublic, DebateUpdate
 from app.models.debate_judge import DebateJudge, DebateJudgeCreate, DebateJudgePublic
 from app.models.debater import Debater, DebaterCreate, DebaterPublic, DebaterUpdate
 from app.models.debater_profile import DebaterProfile, DebaterProfilePublic
-from app.models.enums import Side, SpeakerPosition
+from app.models.enums import Side, SpeakerPosition, UserRole
 from app.models.institution import (
     Institution,
     InstitutionCreate,
@@ -28,6 +28,14 @@ from app.models.tournament import (
     TournamentCreate,
     TournamentPublic,
     TournamentUpdate,
+)
+from app.models.user import (
+    AuthSession,
+    PasswordReset,
+    User,
+    UserCreate,
+    UserPublic,
+    UserUpdate,
 )
 
 __all__ = [
@@ -51,6 +59,7 @@ __all__ = [
     "DebaterProfilePublic",
     "Side",
     "SpeakerPosition",
+    "UserRole",
     "Institution",
     "InstitutionCreate",
     "InstitutionPublic",
@@ -83,4 +92,10 @@ __all__ = [
     "TournamentCreate",
     "TournamentPublic",
     "TournamentUpdate",
+    "AuthSession",
+    "PasswordReset",
+    "User",
+    "UserCreate",
+    "UserPublic",
+    "UserUpdate",
 ]

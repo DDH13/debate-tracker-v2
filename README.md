@@ -34,6 +34,10 @@ typo'd variable name is silently ignored rather than erroring, so double-check s
 | `TABBYCAT_CACHE_DIR`   | unset      | Directory for caching Tabbycat API responses. See [caching](#caching-tabbycat-responses) below. |
 | `IMPORT_TRACE`         | `false`    | Verbose per-record tracing during a tournament import.            |
 | `CORS_ORIGINS`         | `["*"]`    | Allowed CORS origins, as a JSON list (e.g. `["https://admin.example.com"]`). |
+| `SESSION_COOKIE_NAME`  | `dt_session` | Name of the admin session cookie.                              |
+| `SESSION_TTL_DAYS`     | `14`       | How long an admin sign-in lasts.                                   |
+| `SESSION_COOKIE_SECURE` | `false`   | Mark the session cookie `Secure`. Set `true` in production (HTTPS). |
+| `SESSION_COOKIE_SAMESITE` | `lax`   | `lax` / `strict` / `none`. See [authentication](#authentication). |
 
 ## Run
 
@@ -56,6 +60,32 @@ connections hang forever instead of failing.
 ```bash
 make test
 ```
+
+## Authentication
+
+Reads (`GET`) on the tournament/people/stats endpoints are public. Every write on them
+(imports, merges, `/stats/refresh`, CRUD) and everything under `/api/v1/admin` needs a
+signed-in **board** user; `volunteer` users can sign in but get `403` there.
+
+```bash
+make user EMAIL=chair@example.com NAME="Chair"                  # board user, prompts for password
+make user EMAIL=vol@example.com NAME="Volunteer" ROLE=volunteer
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /auth/login` | `{email, password}` → sets an httpOnly session cookie, returns the user. |
+| `POST /auth/logout` | Revokes the session and clears the cookie. |
+| `GET /auth/me` | The signed-in user, or `401`. |
+| `/admin/users` | Board-only user management: list/create, `PATCH` (name, email, role, `is_active`), `POST /admin/users/{id}/password`. The last active board user can't be demoted or deactivated. |
+
+Sessions are server-side rows (`authsession`, only the token's sha256 is stored), so
+deactivating a user or resetting their password signs them out immediately.
+
+The cookie defaults assume the UI and API share an origin (the UI's Vite dev proxy, or a
+reverse proxy in production). If they're ever split across sites, set
+`SESSION_COOKIE_SAMESITE=none`, `SESSION_COOKIE_SECURE=true`, an explicit `CORS_ORIGINS`
+list, and add `allow_credentials=True` to the CORS middleware in `app/main.py`.
 
 ## Database management
 

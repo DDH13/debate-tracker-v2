@@ -1,6 +1,9 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.api.deps import require_board, require_board_for_writes
 from app.api.v1.endpoints import (
+    admin,
+    auth,
     ballots,
     debaters,
     debates,
@@ -14,13 +17,21 @@ from app.api.v1.endpoints import (
 )
 
 api_router = APIRouter()
-api_router.include_router(tournaments.router)
-api_router.include_router(institutions.router)
-api_router.include_router(debaters.router)
-api_router.include_router(judges.router)
-api_router.include_router(teams.router)
-api_router.include_router(rounds.router)
-api_router.include_router(motions.router)
-api_router.include_router(debates.router)
-api_router.include_router(ballots.router)
-api_router.include_router(stats.router)
+api_router.include_router(auth.router)
+
+# Public reads; every write needs a board user.
+for public_router in (
+    tournaments.router,
+    institutions.router,
+    debaters.router,
+    judges.router,
+    teams.router,
+    rounds.router,
+    motions.router,
+    debates.router,
+    ballots.router,
+    stats.router,
+):
+    api_router.include_router(public_router, dependencies=[Depends(require_board_for_writes)])
+
+api_router.include_router(admin.router, dependencies=[Depends(require_board)])
