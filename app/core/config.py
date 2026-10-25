@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     log_level: str = "DEBUG"
     import_trace: bool = False
     tabbycat_cache_dir: str | None = None
+    cors_origins: list[str] = ["*"]
 
 
 settings = Settings()

@@ -1,18 +1,27 @@
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import func, select
+from sqlmodel import SQLModel, func, select
 
-from app.api.deps import SessionDep, get_or_404
+from app.api.deps import SessionDep, get_or_404, merge_errors
 from app.models import (
     Debater,
     DebaterCreate,
+    DebaterProfile,
     DebaterPublic,
     DebaterUpdate,
     Institution,
     SpeakerScore,
 )
+from app.services import merge
 
 router = APIRouter(prefix="/debaters", tags=["debaters"])
+
+
+class DebaterMergeRequest(SQLModel):
+    source_id: int
+    target_id: int
 
 
 @router.post("", response_model=DebaterPublic, status_code=status.HTTP_201_CREATED)
@@ -43,6 +52,29 @@ def list_debaters(
     if institution_id is not None:
         query = query.where(Debater.institution_id == institution_id)
     return session.exec(query.offset(offset).limit(limit)).all()
+
+
+# Static paths must be declared before `/{debater_id}`, or the int path parameter claims them.
+
+
+@router.post("/merge", response_model=DebaterPublic)
+def merge_debaters(merge_in: DebaterMergeRequest, session: SessionDep) -> Debater:
+    """Fold `source_id` into `target_id`: scores and team memberships move across, null
+    fields on the target are filled from the source, and the source is deleted."""
+    with merge_errors():
+        return merge.merge_debaters(session, merge_in.source_id, merge_in.target_id)
+
+
+@router.get("/duplicates", response_model=list[merge.DuplicateGroup])
+def find_duplicate_debaters(
+    session: SessionDep, by: Literal["name", "name_birthdate"] = "name"
+) -> list[merge.DuplicateGroup]:
+    return merge.find_duplicates(session, Debater, by_birthdate=by == "name_birthdate")
+
+
+@router.get("/merge-info", response_model=list[merge.DebaterMergeInfo])
+def debater_merge_info(session: SessionDep) -> list[merge.DebaterMergeInfo]:
+    return merge.debater_merge_info(session)
 
 
 @router.get("/{debater_id}", response_model=DebaterPublic)
@@ -82,5 +114,10 @@ def delete_debater(debater_id: int, session: SessionDep) -> None:
             detail=f"Cannot delete debater: referenced by {score_count} speaker score(s)",
         )
 
+    # The profile FK has no cascade, so a refreshed debater would otherwise 500 here.
+    for profile in session.exec(
+        select(DebaterProfile).where(DebaterProfile.debater_id == debater_id)
+    ).all():
+        session.delete(profile)
     session.delete(debater)
     session.commit()

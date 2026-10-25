@@ -8,7 +8,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.models import Team, TeamMember
+from app.models import (
+    Ballot,
+    Debate,
+    Debater,
+    Institution,
+    Judge,
+    Motion,
+    Round,
+    Team,
+    TeamMember,
+    Tournament,
+)
 from app.services.tabbycat import _TabbycatClient, describe_integrity_error, import_tournament
 
 BASE_URL = "https://tab.example.com"
@@ -706,3 +717,234 @@ def test_integrity_error_detail_names_the_constraint(client: TestClient, session
     detail = resp.json()["detail"]
     assert "UNIQUE" in detail
     assert "team" in detail
+
+
+# --- identity matching, normalization, preview ---
+
+
+def _team(id_: int, institution_url: str | None, speakers: list[dict]) -> dict:
+    name = f"Team {id_}"
+    return {
+        "id": id_,
+        "url": u(f"/api/v1/tournaments/{SLUG}/teams/{id_}"),
+        "institution": institution_url,
+        "reference": str(id_),
+        "short_reference": str(id_),
+        "short_name": name,
+        "long_name": name,
+        "speakers": speakers,
+    }
+
+
+def _institution(id_: int, name: str, code: str | None = None) -> dict:
+    return {"id": id_, "url": u(f"/api/v1/institutions/{id_}"), "name": name, "code": code}
+
+
+def _by_kind(report: dict, kind: str) -> list[dict]:
+    return [r for r in report["resolutions"] if r["kind"] == kind]
+
+
+def test_institution_matches_existing_row_by_key(client: TestClient, session: Session) -> None:
+    existing = Institution(name="St Peters College")
+    session.add(existing)
+    session.commit()
+    upstream = _institution(9, "St. Peter\u2019s College", "SPC")
+    team = _team(801, upstream["url"], [])
+
+    with respx.mock:
+        _register_minimal(teams=[team], institutions=[upstream])
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 201, resp.text
+    report = resp.json()
+    assert report["institutions"] == 0
+    assert len(session.exec(select(Institution)).all()) == 1
+    assert session.exec(select(Team)).one().institution_id == existing.id
+    assert _by_kind(report, "institution") == [
+        {
+            "kind": "institution",
+            "upstream_name": "St. Peter\u2019s College",
+            "local_id": existing.id,
+            "local_name": "St Peters College",
+            "how": "institution-key",
+        }
+    ]
+
+
+def test_new_institution_name_is_normalized_and_reported_as_created(
+    client: TestClient, session: Session
+) -> None:
+    upstream = _institution(9, "  Royal\u00a0College  ", "RC")
+    with respx.mock:
+        _register_minimal(teams=[_team(802, upstream["url"], [])], institutions=[upstream])
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["institutions"] == 1
+    assert session.exec(select(Institution)).one().name == "Royal College"
+    assert _by_kind(resp.json(), "institution")[0]["how"] == "created"
+
+
+def test_person_reuse_is_case_and_whitespace_insensitive(client: TestClient, session: Session) -> None:
+    institution = Institution(name="University A")
+    session.add(institution)
+    session.commit()
+    existing = Debater(full_name="Alice Adams", institution_id=institution.id)
+    session.add(existing)
+    session.commit()
+
+    upstream = _institution(1, "University A")
+    team = _team(803, upstream["url"], [_speaker(301, "  ALICE   ADAMS ", "Adams", None, "F")])
+    with respx.mock:
+        _register_minimal(teams=[team], institutions=[upstream])
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 201, resp.text
+    report = resp.json()
+    assert report["debaters"] == 0
+    assert len(session.exec(select(Debater)).all()) == 1
+    assert session.exec(select(TeamMember)).one().debater_id == existing.id
+    assert _by_kind(report, "debater") == [
+        {
+            "kind": "debater",
+            "upstream_name": "ALICE   ADAMS",
+            "local_id": existing.id,
+            "local_name": "Alice Adams",
+            "how": "name+institution",
+        }
+    ]
+
+
+def test_same_name_at_another_institution_creates_with_possible_duplicate_note(
+    client: TestClient, session: Session
+) -> None:
+    other = Institution(name="Other U")
+    session.add(other)
+    session.commit()
+    no_institution = Debater(full_name="Alice Adams")
+    elsewhere = Debater(full_name="alice adams", institution_id=other.id)
+    session.add_all([no_institution, elsewhere])
+    session.commit()
+
+    upstream = _institution(1, "University A")
+    team = _team(804, upstream["url"], [_speaker(302, "Alice Adams", "Adams", None, "F")])
+    with respx.mock:
+        _register_minimal(teams=[team], institutions=[upstream])
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 201, resp.text
+    report = resp.json()
+    assert report["debaters"] == 1  # a third Alice Adams is created, not merged
+    assert len(session.exec(select(Debater)).all()) == 3
+    note = next(s for s in report["skipped"] if "possible duplicate" in s)
+    assert "Debater 'Alice Adams' created" in note
+    assert f"#{no_institution.id} (none)" in note
+    assert f"#{elsewhere.id} (Other U)" in note
+    assert _by_kind(report, "debater")[0]["how"] == "created"
+
+
+def test_no_possible_duplicate_note_when_name_is_unique(client: TestClient) -> None:
+    with respx.mock:
+        register_routes()
+        resp = client.post(IMPORT_URL, json=_import_payload())
+    assert resp.status_code == 201, resp.text
+    assert not any("possible duplicate" in s for s in resp.json()["skipped"])
+
+
+def test_new_person_names_are_tidied_and_split(client: TestClient, session: Session) -> None:
+    team = _team(
+        805,
+        None,
+        [
+            _speaker(303, "ANNA VAN BERG", "", None, None),  # no last_name from Tabbycat: heuristic split
+            _speaker(304, "carl cole", "Cole", None, "M"),  # last_name given: used as-is
+            _speaker(305, "Siobhan McDonald", "McDonald", None, "F"),  # mixed case untouched
+        ],
+    )
+    with respx.mock:
+        _register_minimal(teams=[team])
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 201, resp.text
+    people = {d.full_name: d for d in session.exec(select(Debater)).all()}
+    assert set(people) == {"Anna van Berg", "Carl Cole", "Siobhan McDonald"}
+    assert (people["Anna van Berg"].first_name, people["Anna van Berg"].last_name) == ("Anna", "van Berg")
+    assert (people["Carl Cole"].first_name, people["Carl Cole"].last_name) == ("Carl", "Cole")
+    assert people["Siobhan McDonald"].last_name == "McDonald"
+
+
+def test_motion_text_and_info_slide_html_is_normalized(client: TestClient, session: Session) -> None:
+    round_ = {
+        "id": 901,
+        "url": u(f"/api/v1/tournaments/{SLUG}/rounds/1"),
+        "seq": 1,
+        "name": "Round 1",
+        "abbreviation": "R1",
+        "stage": "P",
+        "completed": True,
+        "starts_at": None,
+    }
+    motion = _motion(902, round_["url"], "This House &amp; <i>that</i> House")
+    motion["info_slide"] = "<p>Definitions:&nbsp;<b>fast</b> \u2014 \u201cquick\u201d</p>\n<p>More.</p>"
+    with respx.mock:
+        _register_minimal(rounds=[round_], motions=[motion])
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 201, resp.text
+    stored = session.exec(select(Motion)).one()
+    assert stored.text == "This House & that House"
+    assert stored.info_slide == 'Definitions: fast - "quick" More.'
+
+
+def test_resolutions_are_reported_on_real_import(client: TestClient) -> None:
+    with respx.mock:
+        register_routes()
+        resp = client.post(IMPORT_URL, json=_import_payload())
+
+    assert resp.status_code == 201, resp.text
+    report = resp.json()
+    assert [r["how"] for r in _by_kind(report, "institution")] == ["created", "created"]
+    debaters = _by_kind(report, "debater")
+    assert len(debaters) == 11  # one per upstream speaker
+    assert sum(1 for r in debaters if r["how"] == "created") == 9
+    reused = {r["upstream_name"]: r["how"] for r in debaters if r["how"] != "created"}
+    assert reused == {"Andrew Ali": "name+institution", "Bob Brooks": "email"}
+    assert len(_by_kind(report, "judge")) == 3
+
+
+def test_preview_rolls_back_and_reports_resolutions(client: TestClient, session: Session) -> None:
+    with respx.mock:
+        register_routes()
+        preview = client.post(f"{IMPORT_URL}/preview", json=_import_payload())
+
+        assert preview.status_code == 200, preview.text
+        report = preview.json()
+        assert report["institutions"] == 2
+        assert report["teams"] == 4
+        assert report["debaters"] == 9
+        assert report["judges"] == 3
+        assert report["ballots"] == 2
+        assert len(_by_kind(report, "debater")) == 11
+        assert any("expected 2 teams, got 4" in s for s in report["skipped"])
+
+        session.expire_all()
+        for model in (Tournament, Institution, Team, Debater, Judge, Round, Debate, Ballot, Motion):
+            assert session.exec(select(model)).all() == [], model.__name__
+
+        # Nothing was committed, so the same slug can now be imported for real.
+        real = client.post(IMPORT_URL, json=_import_payload())
+    assert real.status_code == 201, real.text
+    assert real.json()["debaters"] == report["debaters"]
+    assert len(session.exec(select(Tournament)).all()) == 1
+
+
+def test_preview_of_existing_slug_is_409_and_upstream_errors_map(client: TestClient, session: Session) -> None:
+    with respx.mock:
+        register_routes()
+        assert client.post(IMPORT_URL, json=_import_payload()).status_code == 201
+        assert client.post(f"{IMPORT_URL}/preview", json=_import_payload()).status_code == 409
+
+    with respx.mock:
+        respx.get(u("/api/v1/tournaments/missing")).mock(return_value=httpx.Response(404, json={}))
+        resp = client.post(f"{IMPORT_URL}/preview", json=_import_payload(slug="missing"))
+    assert resp.status_code == 404

@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import func, select
+from sqlmodel import SQLModel, func, select
 
-from app.api.deps import SessionDep, get_or_404
+from app.api.deps import SessionDep, get_or_404, merge_errors
 from app.models import (
     Debater,
     Institution,
@@ -12,8 +12,15 @@ from app.models import (
     Judge,
     Team,
 )
+from app.services import institutions as institution_service
+from app.services import merge
 
 router = APIRouter(prefix="/institutions", tags=["institutions"])
+
+
+class InstitutionMergeRequest(SQLModel):
+    target_id: int
+    source_ids: list[int]
 
 
 @router.post("", response_model=InstitutionPublic, status_code=status.HTTP_201_CREATED)
@@ -39,6 +46,29 @@ def list_institutions(
     limit: int = Query(default=100, le=100),
 ) -> list[Institution]:
     return session.exec(select(Institution).offset(offset).limit(limit)).all()
+
+
+# Static paths must be declared before `/{institution_id}`, or the int path parameter claims them.
+
+
+@router.post("/merge", response_model=InstitutionPublic)
+def merge_institutions(merge_in: InstitutionMergeRequest, session: SessionDep) -> Institution:
+    """Fold every institution in `source_ids` into `target_id`, reassigning their teams,
+    debaters and judges, then delete the sources."""
+    with merge_errors():
+        return merge.merge_institutions(session, merge_in.target_id, merge_in.source_ids)
+
+
+@router.get("/similar", response_model=list[institution_service.SimilarInstitution])
+def similar_institutions(
+    session: SessionDep, name: str, threshold: float = Query(default=0.8, ge=0, le=1)
+) -> list[institution_service.SimilarInstitution]:
+    return institution_service.similar_institutions(session, name, threshold)
+
+
+@router.get("/merge-info", response_model=list[merge.InstitutionMergeInfo])
+def institution_merge_info(session: SessionDep) -> list[merge.InstitutionMergeInfo]:
+    return merge.institution_merge_info(session)
 
 
 @router.get("/{institution_id}", response_model=InstitutionPublic)

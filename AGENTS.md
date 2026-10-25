@@ -51,13 +51,24 @@ in-memory SQLite engine per test via the `session`/`client` fixtures in
   `app/api/v1/router.py`. Endpoints use `SessionDep` and `get_or_404` from `app/api/deps.py`.
   Uniqueness conflicts are caught as `IntegrityError` and turned into `409`.
 - `app/services/stats/` — pure computation over ballots/debates for tournament, debater,
-  and judge statistics.
+  and judge statistics. `history.py` holds the raw score / debate / team history queries
+  (per-tournament groupings) built on `core`.
+- `app/services/text.py` — pure name/text normalization (`normalize_text`, `name_key`,
+  `split_name`, `tidy_case`, `institution_key`, `jaro_winkler`). No DB access.
+- `app/services/institutions.py` — `find_matching_institution` (key equality, used by the
+  importer) and `similar_institutions` (fuzzy, human-facing search only — never auto-match
+  on Jaro-Winkler).
+- `app/services/merge.py` — debater/judge/institution merges (one commit each; raises
+  `MergeNotFound`/`MergeInvalid`/`MergeConflict`, mapped to 404/422/409 by
+  `merge_errors()` in `app/api/deps.py`) plus the duplicate finders and merge-info lists.
 - `app/services/tabbycat.py` — importer that pulls a tournament from a
   [Tabbycat](https://tabbycat.readthedocs.io) instance. Tabbycat's model (BP-style 4-team
   debates, multiple motions per round, arbitrary scoring criteria) is richer than this
   app's two-team schema, so anything that doesn't map is skipped, not aborted — see the
   `skipped` list in `ImportReport`. There is no `tabbycat_id` column, so re-importing the
   same slug is not idempotent and raises `409`.
+- Static routes such as `/merge`, `/duplicates`, `/similar`, `/merge-info` must be declared
+  **before** `/{id}` in their router, or the int path parameter claims them and returns 422.
 - `app/core/config.py` — `pydantic-settings` config read from `.env` with `extra="ignore"`,
   so a typo'd env var name is silently ignored rather than erroring.
 
@@ -69,3 +80,19 @@ in-memory SQLite engine per test via the `session`/`client` fixtures in
 - Match existing router error-handling patterns (`get_or_404`, catching `IntegrityError`
   for conflicts) rather than introducing new patterns.
 - No linter/formatter is configured in this repo — match surrounding style by hand.
+
+## Stats semantics
+
+Deliberate choices, mostly inherited from the Java app (v1):
+
+- **Debater speaker average is prelim-only.** `average_speaker_score`, `speaker_score_stdev`,
+  `total_speeches`, `speaker_rank` and `speaker_score_percentile` are computed from prelim
+  round scores only. `iron_person_count` still counts prelims and elims.
+- **Judge `score_stdev` uses substantive speeches only**, since replies are on a half scale.
+  `average_reply` is still reported separately.
+- Round scores are normalized as panel mean → drop replies → max over positions spoken
+  (iron merge).
+- Kept from v2 on purpose: leniency/harshness as means, competition ranking for ties, and
+  quartiles in the global distribution.
+- Tournament stats are computed per request; debater/judge profiles are materialized by
+  `POST /stats/refresh` and go stale after merges or imports until it is re-run.

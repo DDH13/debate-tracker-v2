@@ -1,4 +1,18 @@
 from app.services.stats.debater import HeadToHeadRecord, head_to_head
+from app.services.stats.history import (
+    DebaterScores,
+    DebaterTeam,
+    TournamentAverage,
+    TournamentDebates,
+    TournamentJudgeDebates,
+    TournamentJudgeScores,
+    debater_debates,
+    debater_scores,
+    debater_teams,
+    judge_debates,
+    judge_scores,
+    tournament_averages,
+)
 from app.services.stats.judge import JudgeSentiment, judge_sentiment
 from app.services.stats.profiles import (
     GlobalDistribution,
@@ -24,6 +38,18 @@ from app.services.stats.tournament import (
 )
 
 __all__ = [
+    "DebaterScores",
+    "DebaterTeam",
+    "TournamentAverage",
+    "TournamentDebates",
+    "TournamentJudgeDebates",
+    "TournamentJudgeScores",
+    "debater_debates",
+    "debater_scores",
+    "debater_teams",
+    "judge_debates",
+    "judge_scores",
+    "tournament_averages",
     "HeadToHeadRecord",
     "head_to_head",
     "JudgeSentiment",

@@ -3,7 +3,7 @@ import logging
 import httpx
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import SQLModel, select
+from sqlmodel import Session, SQLModel, select
 
 from app.api.deps import SessionDep, get_or_404
 from app.models import Tournament, TournamentCreate, TournamentPublic, TournamentUpdate
@@ -43,16 +43,9 @@ def create_tournament(tournament_in: TournamentCreate, session: SessionDep) -> T
     return tournament
 
 
-@router.post("/import", response_model=ImportReport, status_code=status.HTTP_201_CREATED)
-def import_tabbycat_tournament(import_in: TabbycatImportRequest, session: SessionDep) -> ImportReport:
-    """Import a tournament from a Tabbycat instance.
-
-    Fetches the tournament, institutions, teams, adjudicators, rounds and (unless
-    `include_ballots=False`) ballots from the Tabbycat REST API at `base_url` and
-    creates the equivalent rows locally. This is a synchronous, blocking call: with
-    `include_ballots=True` it makes `1 + rounds + debates` upstream requests and can
-    take a while for a large tournament.
-    """
+def _run_tabbycat_import(
+    import_in: TabbycatImportRequest, session: Session, *, dry_run: bool
+) -> ImportReport:
     try:
         return import_tournament(
             import_in.base_url,
@@ -60,6 +53,7 @@ def import_tabbycat_tournament(import_in: TabbycatImportRequest, session: Sessio
             import_in.api_key,
             session=session,
             include_ballots=import_in.include_ballots,
+            dry_run=dry_run,
         )
     except TournamentAlreadyExists as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -80,6 +74,28 @@ def import_tabbycat_tournament(import_in: TabbycatImportRequest, session: Sessio
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Import conflicts with existing data: {detail}",
         ) from exc
+
+
+@router.post("/import", response_model=ImportReport, status_code=status.HTTP_201_CREATED)
+def import_tabbycat_tournament(import_in: TabbycatImportRequest, session: SessionDep) -> ImportReport:
+    """Import a tournament from a Tabbycat instance.
+
+    Fetches the tournament, institutions, teams, adjudicators, rounds and (unless
+    `include_ballots=False`) ballots from the Tabbycat REST API at `base_url` and
+    creates the equivalent rows locally. This is a synchronous, blocking call: with
+    `include_ballots=True` it makes `1 + rounds + debates` upstream requests and can
+    take a while for a large tournament.
+    """
+    return _run_tabbycat_import(import_in, session, dry_run=False)
+
+
+@router.post("/import/preview", response_model=ImportReport)
+def preview_tabbycat_import(import_in: TabbycatImportRequest, session: SessionDep) -> ImportReport:
+    """Run an import and roll it back. Returns the same report as `POST /import` (counts,
+    skips, possible-duplicate notes and how each upstream person or institution resolved)
+    without writing anything. With `TABBYCAT_CACHE_DIR` set, a following real import replays
+    from the cache, so previewing costs no extra upstream calls."""
+    return _run_tabbycat_import(import_in, session, dry_run=True)
 
 
 @router.get("", response_model=list[TournamentPublic])

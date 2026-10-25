@@ -596,3 +596,20 @@ def test_replace_ballot_scores_with_categories(client: TestClient) -> None:
         assert row["content"] is None
         assert row["style"] is None
         assert row["strategy"] is None
+
+
+def test_cors_allows_any_origin_by_default(client: TestClient) -> None:
+    resp = client.get("/health", headers={"Origin": "https://admin.example.com"})
+    assert resp.headers["access-control-allow-origin"] == "*"
+
+    preflight = client.options(
+        "/api/v1/debaters/merge",
+        headers={
+            "Origin": "https://admin.example.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == "*"
+    assert "POST" in preflight.headers["access-control-allow-methods"]

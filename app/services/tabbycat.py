@@ -18,7 +18,7 @@ from typing import NamedTuple
 import httpx
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from app.core.config import settings
 from app.db.session import engine
@@ -39,6 +39,8 @@ from app.models import (
     TeamMember,
     Tournament,
 )
+from app.services.institutions import find_matching_institution
+from app.services.text import name_key, normalize_text, split_name, tidy_case
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,16 @@ class TournamentAlreadyExists(Exception):
         self.slug = slug
 
 
+class Resolution(BaseModel):
+    """How one upstream institution/debater/judge was tied to a local row."""
+
+    kind: str  # "institution" | "debater" | "judge"
+    upstream_name: str
+    local_id: int
+    local_name: str
+    how: str  # "created" | "email" | "name+institution" | "institution-key"
+
+
 class ImportReport(BaseModel):
     tournament_id: int
     institutions: int = 0
@@ -79,6 +91,7 @@ class ImportReport(BaseModel):
     ballots: int = 0
     speaker_scores: int = 0
     skipped: list[str] = []
+    resolutions: list[Resolution] = []
 
 
 def describe_integrity_error(exc: IntegrityError) -> str:
@@ -226,18 +239,6 @@ def _round_seq_from_url(round_url: str) -> int | None:
         return None
 
 
-def _split_name(name: str, last_name: str | None) -> tuple[str | None, str | None]:
-    name = name.strip()
-    if last_name:
-        if name.endswith(last_name):
-            first_name = name[: -len(last_name)].strip() or None
-        else:
-            first_name = name or None
-        return first_name, last_name
-    parts = name.split(None, 1)
-    return (parts[0] if parts else None), None
-
-
 class _PersonResolution(NamedTuple):
     person: object
     created: bool
@@ -245,10 +246,31 @@ class _PersonResolution(NamedTuple):
     key: tuple
 
 
+def _resolution_how(how: str) -> str:
+    if how == "created":
+        return "created"
+    return "email" if how.endswith("email") else "name+institution"
+
+
+def _person_label(person) -> str:
+    return person.full_name or " ".join(p for p in (person.first_name, person.last_name) if p)
+
+
+def _derive_names(name: str, last_name: str | None) -> tuple[str | None, str | None]:
+    """First/last name for a new person: trust Tabbycat's `last_name` when present, else fall
+    back to the `split_name` heuristic."""
+    if last_name:
+        if name.endswith(last_name):
+            return (name[: -len(last_name)].strip() or None), last_name
+        return (name or None), last_name
+    return split_name(name)
+
+
 def _upsert_person(
     session: Session,
     model: type[Debater] | type[Judge],
     cache: dict[tuple, object],
+    report: ImportReport,
     *,
     name: str,
     last_name: str | None,
@@ -258,9 +280,24 @@ def _upsert_person(
     institution_id: int | None,
     source_url: str | None = None,
 ) -> _PersonResolution:
-    name = (name or "").strip()
+    upstream_name = (name or "").strip()
+    name = tidy_case(normalize_text(name))
+    last_name = normalize_text(last_name) or None
     email = email.strip() if email else None
-    key = ("email", email.lower()) if email else ("name", name, institution_id)
+    key = ("email", email.lower()) if email else ("name", name_key(name), institution_id)
+    kind = model.__name__.lower()
+
+    def resolved(person, created: bool, how: str) -> _PersonResolution:
+        report.resolutions.append(
+            Resolution(
+                kind=kind,
+                upstream_name=upstream_name,
+                local_id=person.id,
+                local_name=_person_label(person),
+                how=_resolution_how(how),
+            )
+        )
+        return _PersonResolution(person, created, how, key)
 
     cached = cache.get(key)
     if cached is not None:
@@ -268,13 +305,15 @@ def _upsert_person(
         logger.debug(
             "%s %r resolved via %s cache key=%r (upstream %s)", model.__name__, name, how, key, source_url
         )
-        return _PersonResolution(cached, False, how, key)
+        return resolved(cached, False, how)
 
     if key[0] == "email":
         existing = session.exec(select(model).where(model.email == email)).first()
     else:
         existing = session.exec(
-            select(model).where(model.full_name == name, model.institution_id == institution_id)
+            select(model).where(
+                func.lower(model.full_name) == key[1], model.institution_id == institution_id
+            )
         ).first()
     if existing is not None:
         cache[key] = existing
@@ -288,9 +327,13 @@ def _upsert_person(
             key,
             source_url,
         )
-        return _PersonResolution(existing, False, how, key)
+        return resolved(existing, False, how)
 
-    first_name, resolved_last_name = _split_name(name, last_name)
+    namesakes = session.exec(
+        select(model).where(func.lower(model.full_name) == name_key(name)).order_by(model.id)
+    ).all()
+
+    first_name, resolved_last_name = _derive_names(name, last_name)
     person = model(
         full_name=name,
         first_name=first_name,
@@ -304,7 +347,24 @@ def _upsert_person(
     session.flush()
     cache[key] = person
     logger.debug("%s %r created id=%s key=%r (upstream %s)", model.__name__, name, person.id, key, source_url)
-    return _PersonResolution(person, True, "created", key)
+
+    if namesakes:
+        institution_names = {
+            i.id: i.name
+            for i in session.exec(
+                select(Institution).where(
+                    Institution.id.in_({n.institution_id for n in namesakes if n.institution_id})
+                )
+            ).all()
+        }
+        others = ", ".join(
+            f"#{n.id} ({institution_names.get(n.institution_id, 'none')})" for n in namesakes
+        )
+        _skip(
+            report,
+            f"{model.__name__} {name!r} created; possible duplicate of {others}",
+        )
+    return resolved(person, True, "created")
 
 
 def _normalize_side(value) -> str | None:
@@ -540,20 +600,38 @@ def _run_import(
     for inst in client.get_list(client.url("/api/v1/institutions")):
         institutions_fetched += 1
         with _record_context(f"institution {inst.get('name')!r}", inst):
-            existing_inst = session.exec(select(Institution).where(Institution.name == inst["name"])).first()
+            existing_inst = find_matching_institution(session, inst["name"])
             if existing_inst is not None:
                 institution_by_url[inst["url"]] = existing_inst.id
                 institutions_matched += 1
+                report.resolutions.append(
+                    Resolution(
+                        kind="institution",
+                        upstream_name=inst["name"],
+                        local_id=existing_inst.id,
+                        local_name=existing_inst.name,
+                        how="institution-key",
+                    )
+                )
                 logger.debug("institution %r matched existing id=%s", inst["name"], existing_inst.id)
                 continue
-            new_inst = Institution(name=inst["name"], code=inst.get("code") or None)
+            new_inst = Institution(name=normalize_text(inst["name"]), code=inst.get("code") or None)
             session.add(new_inst)
             session.flush()
             institution_by_url[inst["url"]] = new_inst.id
             report.institutions += 1
+            report.resolutions.append(
+                Resolution(
+                    kind="institution",
+                    upstream_name=inst["name"],
+                    local_id=new_inst.id,
+                    local_name=new_inst.name,
+                    how="created",
+                )
+            )
             logger.debug("institution %r created id=%s code=%r", inst["name"], new_inst.id, inst.get("code"))
     logger.info(
-        "institutions: %d fetched, %d created, %d matched by exact name",
+        "institutions: %d fetched, %d created, %d matched by institution key",
         institutions_fetched,
         report.institutions,
         institutions_matched,
@@ -597,6 +675,7 @@ def _run_import(
                     session,
                     Debater,
                     debater_cache,
+                    report,
                     name=speaker.get("name", ""),
                     last_name=speaker.get("last_name"),
                     email=speaker.get("email"),
@@ -688,6 +767,7 @@ def _run_import(
                 session,
                 Judge,
                 judge_cache,
+                report,
                 name=adj.get("name", ""),
                 last_name=adj.get("last_name"),
                 email=adj.get("email"),
@@ -793,8 +873,8 @@ def _run_import(
                 session.add(
                     Motion(
                         round_id=round_.id,
-                        text=first_motion["text"],
-                        info_slide=first_motion.get("info_slide") or None,
+                        text=normalize_text(first_motion["text"]),
+                        info_slide=normalize_text(first_motion.get("info_slide")) or None,
                     )
                 )
                 session.flush()
@@ -953,6 +1033,7 @@ def import_tournament(
     *,
     session: Session | None = None,
     include_ballots: bool = True,
+    dry_run: bool = False,
 ) -> ImportReport:
     """Fetch a tournament from a Tabbycat instance and populate the local DB.
 
@@ -961,6 +1042,10 @@ def import_tournament(
     (timeouts, connection failures) propagate unchanged. With `include_ballots=True`
     this makes `1 + rounds + debates` upstream requests and can take a while for a
     large tournament.
+
+    With `dry_run=True` the whole import runs, then rolls back instead of committing, so the
+    returned report (counts, skips, resolutions) shows what a real import would do. The
+    report's `tournament_id` refers to a row that no longer exists.
     """
     api_key = api_key or settings.tabbycat_api_key
     owns_session = session is None
@@ -969,7 +1054,11 @@ def import_tournament(
     sink: list[ImportReport] = []
     try:
         report = _run_import(active_session, client, base_url, slug, include_ballots, report_sink=sink)
-        active_session.commit()
+        if dry_run:
+            active_session.rollback()
+            logger.info("import preview slug=%s rolled back (dry run)", slug)
+        else:
+            active_session.commit()
         return report
     except Exception as exc:
         partial = sink[0] if sink else None

@@ -1,3 +1,5 @@
+from statistics import pstdev
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
@@ -508,3 +510,128 @@ def test_global_and_institution_endpoints_smoke(client: TestClient) -> None:
 
     profiles = client.get("/api/v1/stats/debater-profiles?sort_by=speaker_rank").json()
     assert profiles[0]["speaker_rank"] == 1
+
+
+# --- stats semantics: prelim-only speaker averages, substantive-only judge stdev ---
+
+
+def _two_stage_scaffold(client: TestClient, *, elim_bump: float) -> dict:
+    """One judge, one prelim and one elim debate between the same teams. The elim sheet is
+    the prelim sheet with every substantive score raised by `elim_bump`."""
+    scaffold = _build_debate_scaffold(client)
+    prop, opp = scaffold["prop_debaters"], scaffold["opp_debaters"]
+    judge = scaffold["judges"][0]
+    tid = scaffold["tournament"]["id"]
+
+    prelim_sheet = _full_score_sheet(prop, opp)
+    resp = client.post(
+        f"/api/v1/debates/{scaffold['debate']['id']}/ballots",
+        json={"judge_id": judge["id"], "winner": "prop", "scores": prelim_sheet},
+    )
+    assert resp.status_code == 201, resp.text
+
+    elim_round = client.post(
+        f"/api/v1/tournaments/{tid}/rounds", json={"seq": 2, "name": "Final", "isElimination": True}
+    ).json()
+    elim_debate = client.post(
+        f"/api/v1/rounds/{elim_round['id']}/debates",
+        json={"prop_team_id": scaffold["prop_team"]["id"], "opp_team_id": scaffold["opp_team"]["id"]},
+    ).json()
+    client.post(f"/api/v1/debates/{elim_debate['id']}/judges", json={"judge_id": judge["id"]})
+    elim_sheet = [
+        {**row, "final_score": row["final_score"] + (0 if row["position"] == 4 else elim_bump)}
+        for row in prelim_sheet
+    ]
+    resp = client.post(
+        f"/api/v1/debates/{elim_debate['id']}/ballots",
+        json={"judge_id": judge["id"], "winner": "prop", "scores": elim_sheet},
+    )
+    assert resp.status_code == 201, resp.text
+    return scaffold
+
+
+def test_elim_speaker_scores_do_not_affect_debater_average(client: TestClient) -> None:
+    scaffold = _two_stage_scaffold(client, elim_bump=10.0)
+    assert client.post("/api/v1/stats/refresh").status_code == 200
+
+    first_speaker = scaffold["prop_debaters"][0]  # prelim 76.0, elim 86.0
+    profile = client.get(f"/api/v1/debaters/{first_speaker['id']}/profile").json()
+
+    assert profile["average_speaker_score"] == pytest.approx(76.0)  # prelim only; not 81.0
+    assert profile["speaker_score_stdev"] == pytest.approx(0.0)
+    assert profile["total_speeches"] == 1
+    assert profile["prelims_debated"] == 1
+    assert profile["elims_debated"] == 1  # elim participation itself is still counted
+    assert profile["speaker_rank"] is not None
+
+
+def test_iron_person_count_still_covers_elims(client: TestClient) -> None:
+    scaffold = _build_debate_scaffold(client)
+    prop, opp = scaffold["prop_debaters"], scaffold["opp_debaters"]
+    judge = scaffold["judges"][0]
+    tid = scaffold["tournament"]["id"]
+
+    # Elim round with two debates: the same debater speaks first in one and second in the other.
+    elim_round = client.post(
+        f"/api/v1/tournaments/{tid}/rounds", json={"seq": 2, "name": "Final", "isElimination": True}
+    ).json()
+    other_team = client.post(f"/api/v1/tournaments/{tid}/teams", json={"name": "Other"}).json()
+    other_members = [
+        client.post("/api/v1/debaters", json={"full_name": f"Other {i}"}).json() for i in range(2)
+    ]
+    iron = prop[0]
+    for member in other_members:
+        client.post(f"/api/v1/teams/{other_team['id']}/members", json={"debater_id": member["id"]})
+    client.post(f"/api/v1/teams/{other_team['id']}/members", json={"debater_id": iron["id"]})
+
+    debate_a = client.post(
+        f"/api/v1/rounds/{elim_round['id']}/debates",
+        json={"prop_team_id": scaffold["prop_team"]["id"], "opp_team_id": scaffold["opp_team"]["id"]},
+    ).json()
+    opp_team_b = client.post(f"/api/v1/tournaments/{tid}/teams", json={"name": "Opp B"}).json()
+    opp_b = [client.post("/api/v1/debaters", json={"full_name": f"OppB {i}"}).json() for i in range(3)]
+    for member in opp_b:
+        client.post(f"/api/v1/teams/{opp_team_b['id']}/members", json={"debater_id": member["id"]})
+    debate_b = client.post(
+        f"/api/v1/rounds/{elim_round['id']}/debates",
+        json={"prop_team_id": other_team["id"], "opp_team_id": opp_team_b["id"]},
+    ).json()
+    for debate in (debate_a, debate_b):
+        client.post(f"/api/v1/debates/{debate['id']}/judges", json={"judge_id": judge["id"]})
+
+    resp = client.post(
+        f"/api/v1/debates/{debate_a['id']}/ballots",
+        json={"judge_id": judge["id"], "winner": "prop", "scores": _full_score_sheet(prop, opp)},
+    )
+    assert resp.status_code == 201, resp.text
+    second_sheet = _full_score_sheet([other_members[0], other_members[1], iron], opp_b)
+    resp = client.post(
+        f"/api/v1/debates/{debate_b['id']}/ballots",
+        json={"judge_id": judge["id"], "winner": "prop", "scores": second_sheet},
+    )
+    assert resp.status_code == 201, resp.text
+
+    assert client.post("/api/v1/stats/refresh").status_code == 200
+    profile = client.get(f"/api/v1/debaters/{iron['id']}/profile").json()
+    assert profile["iron_person_count"] == 1  # an elim-round iron speech
+    assert profile["total_speeches"] == 0  # ...which stays out of the prelim-only average
+    assert profile["average_speaker_score"] is None
+
+
+def test_replies_do_not_affect_judge_score_stdev(client: TestClient) -> None:
+    scaffold = _build_debate_scaffold(client)
+    prop, opp = scaffold["prop_debaters"], scaffold["opp_debaters"]
+    judge = scaffold["judges"][0]
+    sheet = _full_score_sheet(prop, opp)  # substantive 76, 74.5, 75, 75.5, 75, 74; replies 38, 37.5
+    resp = client.post(
+        f"/api/v1/debates/{scaffold['debate']['id']}/ballots",
+        json={"judge_id": judge["id"], "winner": "prop", "scores": sheet},
+    )
+    assert resp.status_code == 201, resp.text
+    assert client.post("/api/v1/stats/refresh").status_code == 200
+
+    substantive = [r["final_score"] for r in sheet if r["position"] != 4]
+    profile = client.get(f"/api/v1/judges/{judge['id']}/profile").json()
+    assert profile["score_stdev"] == pytest.approx(pstdev(substantive), abs=1e-4)
+    assert profile["score_stdev"] < 1.0  # including the half-scale replies would give ~15
+    assert profile["average_reply"] == pytest.approx(37.75)  # replies are still averaged on their own
