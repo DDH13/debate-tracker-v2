@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date as Date, datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlmodel import Field, Relationship, SQLModel
@@ -13,7 +13,7 @@ class TournamentBase(SQLModel):
     abbr: str | None = None
     base_url: str | None = None
     slug: str = Field(unique=True, index=True)
-    date: date | None = None
+    date: Date | None = None
 
 
 class Tournament(TournamentBase, table=True):
@@ -44,4 +44,4 @@ class TournamentUpdate(SQLModel):
     abbr: str | None = None
     slug: str | None = None
     base_url: str | None = None
-    date: date | None = None
+    date: Date | None = None

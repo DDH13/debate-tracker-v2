@@ -1,5 +1,6 @@
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +26,16 @@ class Settings(BaseSettings):
     # True in production (HTTPS). A split UI/API deployment also needs samesite="none".
     session_cookie_secure: bool = False
     session_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+
+    @field_validator("database_url")
+    @classmethod
+    def _use_psycopg_driver(cls, value: str) -> str:
+        # Hosts like Neon/Vercel hand out `postgres://` or `postgresql://` URLs, which
+        # SQLAlchemy would route to psycopg2; the project depends on psycopg 3.
+        for prefix in ("postgres://", "postgresql://"):
+            if value.startswith(prefix):
+                return "postgresql+psycopg://" + value[len(prefix):]
+        return value
 
 
 settings = Settings()
