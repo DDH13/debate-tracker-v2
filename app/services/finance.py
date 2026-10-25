@@ -37,6 +37,7 @@ from app.models import (
     Trip,
     TripTraveller,
     User,
+    Workshop,
 )
 from app.models.membership import http_url
 
@@ -159,6 +160,9 @@ def validate_transaction(session: Session, txn: Transaction) -> None:
             traveller = session.get(TripTraveller, txn.trip_traveller_id)
             if traveller is not None and traveller.trip_id != txn.trip_id:
                 raise FinanceInvalid("That traveller is not on this trip")
+
+    if txn.workshop_id is not None and txn.kind == TransactionKind.TRANSFER:
+        raise FinanceInvalid("A transfer can't be linked to a workshop")
 
 
 def stamp_transaction(txn: Transaction, user: User) -> None:
@@ -588,6 +592,7 @@ CSV_COLUMNS = (
     "tournament",
     "trip",
     "trip_category",
+    "workshop",
     "receipt_url",
     "notes",
 )
@@ -621,6 +626,7 @@ def transactions_csv(session: Session, rows: list[Transaction]) -> str:
     schools = _names(session, Institution, [r.institution_id for r in rows])
     tournaments = _names(session, Tournament, [r.tournament_id for r in rows])
     trips = _names(session, Trip, [r.trip_id for r in rows])
+    workshops = _names(session, Workshop, [r.workshop_id for r in rows], attr="title")
 
     out = io.StringIO()
     writer = csv.writer(out)
@@ -651,6 +657,7 @@ def transactions_csv(session: Session, rows: list[Transaction]) -> str:
                 tournaments.get(r.tournament_id),
                 trips.get(r.trip_id),
                 r.trip_cost_category,
+                workshops.get(r.workshop_id),
                 r.receipt_url,
                 r.notes,
             )

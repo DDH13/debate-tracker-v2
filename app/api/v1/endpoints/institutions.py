@@ -16,6 +16,7 @@ from app.models import (
     SchoolContact,
     SchoolParticipation,
     Team,
+    WorkshopSchool,
 )
 from app.services import institutions as institution_service
 from app.services import merge
@@ -115,6 +116,7 @@ def delete_institution(institution_id: int, session: SessionDep) -> None:
         "achievement(s)": SchoolAchievement,
         "participation record(s)": SchoolParticipation,
         "feedback item(s)": Feedback,
+        "workshop attendance(s)": WorkshopSchool,
     }
     counts = {
         label: session.exec(

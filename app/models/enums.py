@@ -132,3 +132,28 @@ class TripCostCategory(str, Enum):
     LOCAL_TRANSPORT = "local_transport"
     INSURANCE = "insurance"
     OTHER = "other"
+
+
+class TaskStatus(str, Enum):
+    TODO = "todo"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+    CANCELLED = "cancelled"
+
+
+class TaskPriority(str, Enum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+
+
+class WorkshopStatus(str, Enum):
+    PLANNED = "planned"
+    HELD = "held"
+    CANCELLED = "cancelled"
+
+
+class WorkshopMode(str, Enum):
+    IN_PERSON = "in_person"
+    ONLINE = "online"
+    HYBRID = "hybrid"

@@ -30,6 +30,7 @@ from app.models import (
     TeamMember,
     Tournament,
     Transaction,
+    WorkshopSchool,
 )
 from app.services.stats import core
 from app.services.stats import judge as judge_stats
@@ -179,6 +180,31 @@ def merge_judges(session: Session, source_id: int, target_id: int) -> Judge:
     return target
 
 
+def _merge_workshop_attendance(session: Session, target_id: int, source_ids: list[int]) -> None:
+    """Moves the sources' workshop attendance to the target. When several of the merged
+    schools attended the same workshop (one row per school per workshop), keep one row with
+    the students added up and the notes joined."""
+    rows = session.exec(
+        select(WorkshopSchool)
+        .where(WorkshopSchool.institution_id.in_([target_id, *source_ids]))
+        .order_by(WorkshopSchool.institution_id != target_id, WorkshopSchool.id)
+    ).all()
+    kept: dict[int, WorkshopSchool] = {}
+    for row in rows:
+        keep = kept.get(row.workshop_id)
+        if keep is None:
+            row.institution_id = target_id
+            kept[row.workshop_id] = row
+            session.add(row)
+            continue
+        if row.students is not None:
+            keep.students = (keep.students or 0) + row.students
+        keep.notes = "\n".join(n for n in (keep.notes, row.notes) if n) or None
+        session.add(keep)
+        session.delete(row)
+    session.flush()
+
+
 def merge_institutions(session: Session, target_id: int, source_ids: list[int]) -> Institution:
     unique_sources = list(dict.fromkeys(source_ids))
     if not unique_sources:
@@ -202,6 +228,7 @@ def merge_institutions(session: Session, target_id: int, source_ids: list[int]) 
             )
 
     try:
+        _merge_workshop_attendance(session, target_id, unique_sources)
         for model in (
             Team,
             Debater,

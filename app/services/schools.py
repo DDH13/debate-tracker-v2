@@ -33,6 +33,7 @@ from app.models import (
     Team,
     Tournament,
 )
+from app.services.workshops import SchoolWorkshop, school_workshops
 
 
 class MembershipStatus(str, Enum):
@@ -93,6 +94,7 @@ class SchoolDetail(SQLModel):
     history: list[HistoryEntry]
     feedback: list[FeedbackPublic]
     outreach: list[OutreachLeadPublic]
+    workshops: list[SchoolWorkshop]
 
 
 def membership_standing(years: Iterable[int], year: int) -> MembershipStanding:
@@ -294,4 +296,5 @@ def school_detail(session: Session, institution: Institution, year: int) -> Scho
             OutreachLeadPublic.model_validate(lead)
             for lead in rows(OutreachLead, OutreachLead.created_at.desc())
         ],
+        workshops=school_workshops(session, institution_id),
     )

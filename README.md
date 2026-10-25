@@ -156,6 +156,26 @@ are recorded on the trip as direct costs and are never in the ledger, since the 
 touched a DC account. A trip's actual cost is the two added together; a pending
 reimbursement counts as spent. Per-person figures divide by the number of travellers.
 
+## Board, tasks and workshops
+
+Board-only under `/api/v1/admin`, except `GET /api/v1/me/tasks`.
+
+| Endpoint | Purpose |
+|---|---|
+| `/admin/board-roles` | CRUD (filters `person_id`, `current`). One person's term in one role: title, responsibilities, `term_start`, `term_end` (empty while current; must not precede the start). Past terms are kept, so a person with board roles can't be deleted (409). |
+| `GET /admin/board?on=` | Roles held on a date (default today), roles starting later, and past terms (most recently ended first, with a `2023–2025` style label). |
+| `GET /admin/people/{id}/detail` | A person with their console account, board roles, tasks, workshops facilitated and the money they've paid out of pocket (and are owed). |
+| `/admin/tasks` | CRUD (filters `status`, `priority`, `assignee_person_id`, `workshop_id`, `trip_id`, `tournament_id`, `open`, `overdue`). Assigned to anyone in People; optional links to a workshop, trip or tournament. Marking a task done stamps `completed_on` (unless given); reopening clears it. |
+| `GET /me/tasks` | **Any signed-in console user** (volunteers included): the tasks of the person their account is linked to, open first. Read-only — volunteers can't change tasks. `linked: false` when the account has no person. |
+| `/admin/workshops` | CRUD (filters `status`, `year`). Date, venue, mode, status and `other_attendees` (people not from a listed school). Deleting one removes its school list and facilitators but is a 409 while ledger entries are tagged to it. |
+| `/admin/workshop-schools`, `/admin/workshop-facilitators` | CRUD (filter `workshop_id`). Attending schools with a student count; facilitators from People with a free-text role. Each once per workshop (409). |
+| `GET /admin/workshops/summary?year=` | Every workshop with schools, headcount, facilitators, income, expenses and net. |
+| `GET /admin/workshops/{id}/detail` | One workshop: schools, facilitators, headcount, its ledger entries and money totals, feedback about it and its tasks. |
+
+A workshop's money is ordinary ledger income and expenses tagged with `workshop_id` (not on
+transfers), so it also shows in the finance pages and CSV (`workshop` column). Feedback can
+be about a workshop, and a school's detail lists the workshops it attended.
+
 ## Importing a year's school registrations
 
 Schools register each year through the DC's Google Form. Export the responses tab as CSV

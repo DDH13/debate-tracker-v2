@@ -1,4 +1,5 @@
 from app.models.account import Account, AccountCreate, AccountPublic, AccountUpdate
+from app.models.board_role import BoardRole, BoardRoleCreate, BoardRolePublic, BoardRoleUpdate
 from app.models.ballot import (
     Ballot,
     BallotCreate,
@@ -25,11 +26,15 @@ from app.models.enums import (
     Side,
     SpeakerPosition,
     SquadKind,
+    TaskPriority,
+    TaskStatus,
     SquadRole,
     TransactionKind,
     TripCostCategory,
     TripStatus,
     UserRole,
+    WorkshopMode,
+    WorkshopStatus,
 )
 from app.models.finance_category import (
     FinanceCategory,
@@ -100,6 +105,7 @@ from app.models.subscription import (
     SubscriptionPublic,
     SubscriptionUpdate,
 )
+from app.models.task import Task, TaskCreate, TaskPublic, TaskUpdate
 from app.models.team import Team, TeamCreate, TeamPublic, TeamUpdate
 from app.models.team_member import TeamMember, TeamMemberCreate, TeamMemberPublic
 from app.models.tournament import (
@@ -131,6 +137,20 @@ from app.models.trip import (
     TripTravellerPublic,
     TripTravellerUpdate,
     TripUpdate,
+)
+from app.models.workshop import (
+    Workshop,
+    WorkshopCreate,
+    WorkshopFacilitator,
+    WorkshopFacilitatorCreate,
+    WorkshopFacilitatorPublic,
+    WorkshopFacilitatorUpdate,
+    WorkshopPublic,
+    WorkshopSchool,
+    WorkshopSchoolCreate,
+    WorkshopSchoolPublic,
+    WorkshopSchoolUpdate,
+    WorkshopUpdate,
 )
 from app.models.user import (
     AuthSession,
@@ -289,4 +309,28 @@ __all__ = [
     "TripDirectCostCreate",
     "TripDirectCostPublic",
     "TripDirectCostUpdate",
+    "BoardRole",
+    "BoardRoleCreate",
+    "BoardRolePublic",
+    "BoardRoleUpdate",
+    "Task",
+    "TaskCreate",
+    "TaskPublic",
+    "TaskUpdate",
+    "TaskPriority",
+    "TaskStatus",
+    "WorkshopMode",
+    "WorkshopStatus",
+    "Workshop",
+    "WorkshopCreate",
+    "WorkshopPublic",
+    "WorkshopUpdate",
+    "WorkshopSchool",
+    "WorkshopSchoolCreate",
+    "WorkshopSchoolPublic",
+    "WorkshopSchoolUpdate",
+    "WorkshopFacilitator",
+    "WorkshopFacilitatorCreate",
+    "WorkshopFacilitatorPublic",
+    "WorkshopFacilitatorUpdate",
 ]

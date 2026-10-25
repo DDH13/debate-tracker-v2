@@ -71,6 +71,8 @@ class Transaction(TransactionBase, table=True):
     trip_traveller_id: int | None = Field(
         default=None, foreign_key="triptraveller.id", index=True, ondelete="SET NULL"
     )
+    # Workshop fees and costs. Plain FK: a workshop with ledger entries can't be deleted (409).
+    workshop_id: int | None = Field(default=None, foreign_key="workshop.id", index=True)
     created_by_id: int | None = Field(default=None, foreign_key="user.id", ondelete="SET NULL")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -88,6 +90,7 @@ class TransactionCreate(TransactionBase):
     trip_id: int | None = None
     trip_cost_category: TripCostCategory | None = None
     trip_traveller_id: int | None = None
+    workshop_id: int | None = None
 
 
 class TransactionPublic(TransactionBase):
@@ -103,6 +106,7 @@ class TransactionPublic(TransactionBase):
     trip_id: int | None
     trip_cost_category: TripCostCategory | None
     trip_traveller_id: int | None
+    workshop_id: int | None
     created_by_id: int | None
     created_at: datetime
     updated_at: datetime
@@ -133,6 +137,7 @@ class TransactionUpdate(SQLModel):
     trip_id: int | None = None
     trip_cost_category: TripCostCategory | None = None
     trip_traveller_id: int | None = None
+    workshop_id: int | None = None
 
     _check_currency = field_validator("original_currency")(currency_code)
     _check_receipt = field_validator("receipt_url")(http_url)

@@ -1,14 +1,17 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints.admin import (
+    board,
     feedback,
     finance,
     outreach,
     people,
     schools,
     squads,
+    tasks,
     trips,
     users,
+    workshops,
 )
 
 # Board-only management console. The require_board guard is attached where this router is
@@ -22,3 +25,6 @@ router.include_router(people.router)
 router.include_router(finance.router)
 router.include_router(squads.router)
 router.include_router(trips.router)
+router.include_router(board.router)
+router.include_router(tasks.router)
+router.include_router(workshops.router)

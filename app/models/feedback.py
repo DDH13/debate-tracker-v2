@@ -17,7 +17,7 @@ class FeedbackBase(SQLModel):
 
 class Feedback(FeedbackBase, table=True):
     """Feedback received by the DC. The subject FKs are all optional: a row can be about a
-    school, a tournament, a judge, any combination, or nothing in particular."""
+    school, a tournament, a judge, a workshop, any combination, or nothing in particular."""
 
     id: int | None = Field(default=None, primary_key=True)
     institution_id: int | None = Field(default=None, foreign_key="institution.id", index=True)
@@ -27,6 +27,9 @@ class Feedback(FeedbackBase, table=True):
     judge_id: int | None = Field(
         default=None, foreign_key="judge.id", index=True, ondelete="SET NULL"
     )
+    workshop_id: int | None = Field(
+        default=None, foreign_key="workshop.id", index=True, ondelete="SET NULL"
+    )
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -34,6 +37,7 @@ class FeedbackCreate(FeedbackBase):
     institution_id: int | None = None
     tournament_id: int | None = None
     judge_id: int | None = None
+    workshop_id: int | None = None
 
 
 class FeedbackPublic(FeedbackBase):
@@ -41,6 +45,7 @@ class FeedbackPublic(FeedbackBase):
     institution_id: int | None
     tournament_id: int | None
     judge_id: int | None
+    workshop_id: int | None
     created_at: datetime
 
 
@@ -55,3 +60,4 @@ class FeedbackUpdate(SQLModel):
     institution_id: int | None = None
     tournament_id: int | None = None
     judge_id: int | None = None
+    workshop_id: int | None = None

@@ -10,6 +10,7 @@ from app.models import (
     Institution,
     Judge,
     Tournament,
+    Workshop,
 )
 
 
@@ -17,6 +18,7 @@ class FeedbackFilters(ListParams):
     institution_id: int | None = None
     tournament_id: int | None = None
     judge_id: int | None = None
+    workshop_id: int | None = None
     status: FeedbackStatus | None = None
 
 
@@ -30,5 +32,10 @@ add_crud_routes(
     update_schema=FeedbackUpdate,
     filters=FeedbackFilters,
     order_by=(Feedback.created_at.desc(),),
-    parents={"institution_id": Institution, "tournament_id": Tournament, "judge_id": Judge},
+    parents={
+        "institution_id": Institution,
+        "tournament_id": Tournament,
+        "judge_id": Judge,
+        "workshop_id": Workshop,
+    },
 )

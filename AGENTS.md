@@ -141,11 +141,29 @@ is covered automatically, and a new public write must be added there deliberatel
     category whenever a trip is set, and the traveller must be on that trip. Budget lines and
     direct costs check the same traveller rule in their `on_save`.
   - `add_crud_routes` also takes an optional `before_delete(session, obj)` hook, used by
-    trips to refuse a delete with a clear message ("unlink or delete its N ledger expenses
-    first") before the FK would produce a generic 409.
-  - `Person` (`admin/people.py`) is the DC's own people; `User.person_id` links a console
-    account to one (`ON DELETE SET NULL`). Transactions and subscriptions reference people
-    without a cascade, so a named person can't be deleted (409).
+    trips, workshops and people to refuse a delete with a clear message ("unlink or delete
+    its N ledger expenses first") before the FK would produce a generic 409.
+  - `Person` (`admin/people.py`, `app/services/people.py`) is the DC's own people;
+    `User.person_id` links a console account to one (`ON DELETE SET NULL`). Board roles,
+    transactions and subscriptions are history, so a person named on any of them can't be
+    deleted: `person_references()` + a `before_delete` hook give a 409 that says which.
+    Facilitator links cascade and tasks become unassigned. `person_detail()` gathers
+    everything about one person; `board()` splits `BoardRole` terms into current / upcoming
+    / past.
+  - Tasks (`admin/tasks.py`, `app/services/tasks.py`): only the board writes them. The one
+    volunteer-facing endpoint is `GET /api/v1/me/tasks` (`app/api/v1/endpoints/me.py`),
+    mounted **outside** `/admin` with `CurrentUserDep` and deliberately read-only: it
+    returns the tasks of the signed-in user's linked person. Being a GET outside `/admin`, it
+    isn't in `test_auth.py`'s `_protected_routes()`; `tests/test_tasks.py` covers it
+    explicitly (anon 401, own tasks only, no write methods). Don't add volunteer writes
+    without revisiting that test.
+  - Workshops (`admin/workshops.py`, `app/services/workshops.py`): `Workshop`,
+    `WorkshopSchool` (institution + student count; unique per workshop) and
+    `WorkshopFacilitator` (person + role). Money is ledger rows with
+    `Transaction.workshop_id` (income or expense, never a transfer — `validate_transaction`);
+    a workshop with ledger rows can't be deleted (`before_delete`). `Feedback.workshop_id`
+    and the task links are `SET NULL`. `merge_institutions` combines two merged schools'
+    attendance at one workshop into one row with the students added up.
 - `app/services/registrations.py` + `scripts/import_registrations.py` (`make
   import-registrations`) — the yearly Google Form registration import. Headers are matched
   by prefix so small form edits don't break it. Resolution order per row: explicit id in the

@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     debates,
     institutions,
     judges,
+    me,
     motions,
     rounds,
     stats,
@@ -18,6 +19,8 @@ from app.api.v1.endpoints import (
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
+# Any signed-in console user (volunteers included); read-only.
+api_router.include_router(me.router)
 
 # Public reads; every write needs a board user.
 for public_router in (
