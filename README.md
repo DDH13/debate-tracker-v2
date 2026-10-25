@@ -101,6 +101,36 @@ Board-only endpoints under `/api/v1/admin`, behind the [console sign-in](#authen
 Fees are LKR decimals and come back as strings (`"7500.00"`). Institutions also have public
 `kind` (school / university / other) and `district` fields.
 
+## Finance and DC people
+
+Board-only, under `/api/v1/admin`. Amounts are LKR decimals returned as strings; a
+transaction can also carry the `original_amount` + `original_currency` actually paid (a USD
+Zoom bill).
+
+| Endpoint | Purpose |
+|---|---|
+| `/admin/people` | CRUD for the DC's own people (board, volunteers, staff). Squad debaters are `Debater`s and school contacts live per school, so neither is here. A console user links to a person via `person_id` on `/admin/users`. |
+| `/admin/accounts`, `/admin/finance-categories` | CRUD. An account has an opening balance as of an `opening_date`. Categories are income or expense; the defaults are seeded at startup and by `make db-create`. Deleting either while transactions or subscriptions use it is a 409 — deactivate instead. |
+| `/admin/transactions` | The ledger: CRUD with filters (`kind`, `category_id`, `account_id` on either side of a transfer, `reimbursement_status`, `paid_by_person_id`, `membership_id`, `subscription_id`, `institution_id`, `date_from`, `date_to`, `q`). Newest first. |
+| `GET /admin/transactions/export.csv` | The same filters as a CSV download (no paging). Text cells starting with `= + - @` are prefixed with `'` so spreadsheets don't run them as formulas. |
+| `POST /admin/transactions/{id}/mark-reimbursed` | Pays back a pending reimbursement: date and the account it was paid from. |
+| `/admin/subscriptions`, `POST /admin/subscriptions/{id}/record-payment` | Recurring bills. Recording a payment adds the expense (prefilled from the subscription) and moves `next_renewal_on` on one cycle (31 Jan + 1 month = 28/29 Feb). |
+| `POST /admin/memberships/{id}/record-payment` | Adds a membership fee as income (category "Membership fees", linked to the membership and school) and fills the membership's blank `paid_on` / `fee_lkr`. Once per membership. |
+| `GET /admin/finance/summary?start=&end=` | Income, expenses and net for the period (default: this calendar year), by month and by category, plus what's owed to people, the monthly recurring cost of active subscriptions, renewals overdue or due in 30 days, and account balances. |
+| `GET /admin/finance/balances?as_of=` | Account balances. |
+
+Ledger rules (422 when broken): income and expenses need a category of the same kind;
+a transfer needs two different accounts and no category; every transaction needs an account
+except a **pending reimbursement** — money someone spent out of their own pocket, which
+hasn't left a DC account yet. Only expenses can be reimbursed, and a reimbursement names the
+person who paid.
+
+Balances are the opening balance plus income, minus expenses, minus transfers out, plus
+transfers in, counting only money that moved on or after the account's opening date (older
+transactions are taken as already in the opening balance). A pending reimbursement isn't
+counted until it's paid back, and then on the date it was paid back. Reports count spending
+by the date it happened, so a pending reimbursement is already an expense there.
+
 ## Importing a year's school registrations
 
 Schools register each year through the DC's Google Form. Export the responses tab as CSV
@@ -137,7 +167,7 @@ mapping's ids are specific to one database.
 ## Database management
 
 ```bash
-make db-create    # create tables (SQLModel.metadata.create_all)
+make db-create    # create tables (SQLModel.metadata.create_all) + default finance categories
 make db-seed      # load sample data (app/db/seed.py)
 make db-drop      # drop all tables — prompts for confirmation
 make db-truncate  # delete all rows, keep schema — prompts for confirmation

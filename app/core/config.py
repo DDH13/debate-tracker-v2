@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     version: str = "0.1.0"
     database_url: str = "sqlite://"
     sql_echo: bool = False
+    # Run create_all and seed the default finance categories at startup. Tests turn it off so
+    # TestClient never touches the .env database.
+    init_db_on_startup: bool = True
     seed_on_startup: bool = False
     tabbycat_base_url: str | None = None
     tabbycat_api_key: str | None = None

@@ -5,7 +5,7 @@ from sqlmodel import select
 from app.api.deps import SessionDep, get_or_404
 from app.core.config import settings
 from app.core.security import hash_password
-from app.models import PasswordReset, User, UserCreate, UserPublic, UserRole, UserUpdate
+from app.models import PasswordReset, Person, User, UserCreate, UserPublic, UserRole, UserUpdate
 from app.services.auth import other_active_board_count, revoke_user_sessions
 
 router = APIRouter(prefix="/users", tags=["admin: users"])
@@ -19,6 +19,8 @@ def _email_conflict() -> HTTPException:
 
 @router.post("", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
 def create_user(user_in: UserCreate, session: SessionDep) -> User:
+    if user_in.person_id is not None:
+        get_or_404(session, Person, user_in.person_id)
     user = User.model_validate(user_in, update={"password_hash": hash_password(user_in.password)})
     session.add(user)
     try:
@@ -48,6 +50,8 @@ def get_user(user_id: int, session: SessionDep) -> User:
 def update_user(user_id: int, user_in: UserUpdate, session: SessionDep) -> User:
     user = get_or_404(session, User, user_id)
     changes = user_in.model_dump(exclude_unset=True)
+    if changes.get("person_id") is not None:
+        get_or_404(session, Person, changes["person_id"])
 
     stays_board = changes.get("role", user.role) == UserRole.BOARD
     stays_active = changes.get("is_active", user.is_active)

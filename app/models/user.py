@@ -20,6 +20,8 @@ class UserBase(SQLModel):
 class User(UserBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     password_hash: str
+    # The DC person this account belongs to (needed for volunteers' tasks in a later phase).
+    person_id: int | None = Field(default=None, foreign_key="person.id", ondelete="SET NULL")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     sessions: list["AuthSession"] = Relationship(
@@ -30,6 +32,7 @@ class User(UserBase, table=True):
 
 class UserCreate(UserBase):
     password: str = Field(min_length=8)
+    person_id: int | None = None
 
     @field_validator("email")
     @classmethod
@@ -39,6 +42,7 @@ class UserCreate(UserBase):
 
 class UserPublic(UserBase):
     id: int
+    person_id: int | None = None
     created_at: datetime
 
 
@@ -47,6 +51,7 @@ class UserUpdate(SQLModel):
     name: str | None = None
     role: UserRole | None = None
     is_active: bool | None = None
+    person_id: int | None = None
 
     @field_validator("email")
     @classmethod

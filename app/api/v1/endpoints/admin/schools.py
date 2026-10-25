@@ -24,6 +24,7 @@ from app.models import (
     SchoolParticipationPublic,
     SchoolParticipationUpdate,
     Tournament,
+    User,
 )
 from app.models.membership import YEAR_MAX, YEAR_MIN
 from app.services import schools as school_service
@@ -85,7 +86,7 @@ class SchoolContactFilters(ListParams):
     active: bool | None = None
 
 
-def _keep_one_primary(session: Session, contact: SchoolContact) -> None:
+def _keep_one_primary(session: Session, contact: SchoolContact, _user: User) -> None:
     """A school has at most one primary contact: making one primary demotes the rest."""
     if not contact.is_primary:
         return

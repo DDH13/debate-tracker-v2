@@ -13,6 +13,7 @@ from app.main import app
 from app.models import User, UserRole
 from app.services.auth import create_auth_session
 
+settings.init_db_on_startup = False  # never create tables or seed rows in the .env database
 settings.seed_on_startup = False
 settings.tabbycat_cache_dir = None  # tests must always hit the respx-mocked client fresh
 

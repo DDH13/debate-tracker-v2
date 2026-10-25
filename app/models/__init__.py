@@ -1,3 +1,4 @@
+from app.models.account import Account, AccountCreate, AccountPublic, AccountUpdate
 from app.models.ballot import (
     Ballot,
     BallotCreate,
@@ -10,15 +11,27 @@ from app.models.debate_judge import DebateJudge, DebateJudgeCreate, DebateJudgeP
 from app.models.debater import Debater, DebaterCreate, DebaterPublic, DebaterUpdate
 from app.models.debater_profile import DebaterProfile, DebaterProfilePublic
 from app.models.enums import (
+    AccountKind,
+    BillingCycle,
     ContactRole,
     FeedbackSentiment,
     FeedbackStatus,
     InstitutionKind,
     LeadChannel,
     LeadStatus,
+    PaymentMethod,
+    PersonKind,
+    ReimbursementStatus,
     Side,
     SpeakerPosition,
+    TransactionKind,
     UserRole,
+)
+from app.models.finance_category import (
+    FinanceCategory,
+    FinanceCategoryCreate,
+    FinanceCategoryPublic,
+    FinanceCategoryUpdate,
 )
 from app.models.feedback import Feedback, FeedbackCreate, FeedbackPublic, FeedbackUpdate
 from app.models.institution import (
@@ -42,6 +55,7 @@ from app.models.outreach_lead import (
     OutreachLeadPublic,
     OutreachLeadUpdate,
 )
+from app.models.person import Person, PersonCreate, PersonPublic, PersonUpdate
 from app.models.round import Round, RoundCreate, RoundPublic, RoundUpdate
 from app.models.school_achievement import (
     SchoolAchievement,
@@ -62,6 +76,12 @@ from app.models.school_participation import (
     SchoolParticipationUpdate,
 )
 from app.models.speaker_score import SpeakerScore, SpeakerScoreCreate, SpeakerScorePublic
+from app.models.subscription import (
+    Subscription,
+    SubscriptionCreate,
+    SubscriptionPublic,
+    SubscriptionUpdate,
+)
 from app.models.team import Team, TeamCreate, TeamPublic, TeamUpdate
 from app.models.team_member import TeamMember, TeamMemberCreate, TeamMemberPublic
 from app.models.tournament import (
@@ -69,6 +89,12 @@ from app.models.tournament import (
     TournamentCreate,
     TournamentPublic,
     TournamentUpdate,
+)
+from app.models.transaction import (
+    Transaction,
+    TransactionCreate,
+    TransactionPublic,
+    TransactionUpdate,
 )
 from app.models.user import (
     AuthSession,
@@ -169,4 +195,30 @@ __all__ = [
     "SchoolParticipationCreate",
     "SchoolParticipationPublic",
     "SchoolParticipationUpdate",
+    "Account",
+    "AccountCreate",
+    "AccountPublic",
+    "AccountUpdate",
+    "AccountKind",
+    "BillingCycle",
+    "PaymentMethod",
+    "PersonKind",
+    "ReimbursementStatus",
+    "TransactionKind",
+    "FinanceCategory",
+    "FinanceCategoryCreate",
+    "FinanceCategoryPublic",
+    "FinanceCategoryUpdate",
+    "Person",
+    "PersonCreate",
+    "PersonPublic",
+    "PersonUpdate",
+    "Subscription",
+    "SubscriptionCreate",
+    "SubscriptionPublic",
+    "SubscriptionUpdate",
+    "Transaction",
+    "TransactionCreate",
+    "TransactionPublic",
+    "TransactionUpdate",
 ]

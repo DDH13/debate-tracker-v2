@@ -9,13 +9,17 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.seed import seed
 from app.db.session import engine, init_db
+from app.services.finance import ensure_default_categories
 
 configure_logging()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    if settings.init_db_on_startup:
+        init_db()
+        with Session(engine) as session:
+            ensure_default_categories(session)
     if settings.seed_on_startup:
         with Session(engine) as session:
             seed(session)

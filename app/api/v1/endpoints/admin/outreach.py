@@ -20,6 +20,7 @@ from app.models import (
     OutreachLeadPublic,
     OutreachLeadUpdate,
     SchoolContact,
+    User,
 )
 from app.models.membership import YEAR_MAX, YEAR_MIN
 from app.services.institutions import find_matching_institution
@@ -53,7 +54,7 @@ class OutreachConversion(SQLModel):
     contact_created: bool
 
 
-def _require_school(_session: Session, lead: OutreachLead) -> None:
+def _require_school(_session: Session, lead: OutreachLead, _user: User) -> None:
     if lead.institution_id is None and not normalize_text(lead.school_name):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

@@ -42,6 +42,10 @@ in-memory SQLite engine per test via the `session`/`client` fixtures in
 `tests/conftest.py` and override the `get_session` dependency — don't hit the real
 `app/db/session.py` engine from tests.
 
+`conftest.py` sets `settings.init_db_on_startup = False`: otherwise `TestClient(app)` runs
+the app lifespan, whose `create_all` and default-category seed would write to the `.env`
+database.
+
 `client` is signed in as a **board** user; use `anon_client` / `volunteer_client` for
 access tests. `tests/test_auth.py` enumerates every route from the OpenAPI schema (not
 `app.routes`, which nests included routers lazily) and asserts each write and each
@@ -86,8 +90,10 @@ is covered automatically, and a new public write must be added there deliberatel
 - Management console (all under `app/api/v1/endpoints/admin/`, board-only):
   - `app/api/crud.py` — `add_crud_routes()` generates POST / GET list / GET / PATCH / DELETE
     for a plain admin resource from its models, a `ListParams` filter subclass (each field is
-    an equality filter), `parents` (FK fields 404-checked before insert/update) and an
-    optional `on_save` hook. Use it for new plain-CRUD tables; hand-write anything that
+    an equality filter, except those named in its `custom` class var, which go to the
+    `filter_hook(statement, params)`), `parents` (FK fields 404-checked before
+    insert/update) and an optional `on_save(session, obj, user)` hook (validation, stamping
+    who changed it). Use it for new plain-CRUD tables; hand-write anything that
     computes or touches several tables (see `convert_lead` in `admin/outreach.py`). PATCH
     rejects explicit nulls on NOT NULL columns with 422 instead of letting them 409.
   - Member schools: `Membership` (one per school per calendar year), `SchoolContact`,
@@ -100,6 +106,20 @@ is covered automatically, and a new public write must be added there deliberatel
   - `Institution` has `kind` and `district` but deliberately **no notes column**:
     `InstitutionPublic` is served by the public `GET /institutions`, so anything internal
     goes on the admin-only tables.
+  - Finance (`admin/finance.py`, `app/services/finance.py`): `Account` (opening balance +
+    `opening_date`), `FinanceCategory` (income / expense; defaults seeded by
+    `ensure_default_categories()` at startup and in `make db-create`), `Subscription` and
+    `Transaction`. The cross-field ledger rules are `validate_transaction()` (run from the
+    factory's `on_save`, so creates and PATCHes both go through it); `account_balances()`
+    counts money by when it moved (`coalesce(reimbursed_on, occurred_on)`, pending
+    reimbursements excluded) while `finance_summary()` counts spending by `occurred_on`.
+    Actions that create transactions for something else — `record_subscription_payment`,
+    `record_membership_payment`, `mark_reimbursed` — are hand-written endpoints. The service
+    raises `FinanceInvalid` / `FinanceConflict`; `finance_errors()` maps them to 422 / 409.
+    The CSV export escapes formula-leading cells (`csv_cell`).
+  - `Person` (`admin/people.py`) is the DC's own people; `User.person_id` links a console
+    account to one (`ON DELETE SET NULL`). Transactions and subscriptions reference people
+    without a cascade, so a named person can't be deleted (409).
 - `app/services/registrations.py` + `scripts/import_registrations.py` (`make
   import-registrations`) — the yearly Google Form registration import. Headers are matched
   by prefix so small form edits don't break it. Resolution order per row: explicit id in the
@@ -117,7 +137,9 @@ is covered automatically, and a new public write must be added there deliberatel
   them `ondelete="SET NULL"` when the row should outlive the parent — feedback and
   achievements do this for tournaments and judges, outreach leads for institutions), and a
   test. `merge_institutions` refuses (409) when two of the merged schools hold a membership
-  for the same year rather than dropping one.
+  for the same year rather than dropping one. `Transaction.institution_id` /
+  `tournament_id` / `membership_id` are `SET NULL` (the money still happened) and the
+  institution merge repoints them.
 - Schema changes: there are no migrations. `create_all` adds new tables on startup but never
   new columns, so a new column on an existing table needs a dev DB reset or a one-off
   `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`. Enum columns are native Postgres enums whose

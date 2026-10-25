@@ -28,6 +28,7 @@ from app.models import (
     Team,
     TeamMember,
     Tournament,
+    Transaction,
 )
 from app.services.stats import core
 from app.services.stats import judge as judge_stats
@@ -199,6 +200,7 @@ def merge_institutions(session: Session, target_id: int, source_ids: list[int]) 
             SchoolParticipation,
             Feedback,
             OutreachLead,
+            Transaction,
         ):
             session.exec(
                 update(model)

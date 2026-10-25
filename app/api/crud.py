@@ -12,18 +12,24 @@ annotations as real classes, not strings.
 """
 
 from collections.abc import Callable, Sequence
-from typing import Annotated, Any
+from typing import Annotated, Any, ClassVar
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, select
+from sqlmodel.sql.expression import SelectOfScalar
 
-from app.api.deps import SessionDep, get_or_404
+from app.api.deps import BoardUserDep, SessionDep, get_or_404
+from app.models import User
 
 
 class ListParams(SQLModel):
     """Base for a resource's list filters. Every field a subclass adds is an equality
-    filter on the model column of the same name, applied when it isn't None."""
+    filter on the model column of the same name, applied when it isn't None, unless it's
+    named in `custom`: those are left to the resource's `filter_hook` (date ranges, text
+    search, ...)."""
+
+    custom: ClassVar[frozenset[str]] = frozenset()
 
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=100, ge=1, le=100)
@@ -31,7 +37,8 @@ class ListParams(SQLModel):
 
 _PAGING = {"offset", "limit"}
 
-OnSave = Callable[[Session, Any], None]
+OnSave = Callable[[Session, Any, User], None]
+FilterHook = Callable[[SelectOfScalar[Any], Any], SelectOfScalar[Any]]
 
 
 def add_crud_routes(
@@ -47,26 +54,34 @@ def add_crud_routes(
     parents: dict[str, type[SQLModel]] | None = None,
     conflict_detail: str = "Conflicts with an existing record",
     on_save: OnSave | None = None,
+    filter_hook: FilterHook | None = None,
 ) -> None:
     """Registers `POST ""`, `GET ""`, `GET /{item_id}`, `PATCH /{item_id}` and
     `DELETE /{item_id}` on `router`.
 
     - `parents` maps FK fields to their model; a set FK pointing nowhere is a 404 (on create
       and update) instead of a database FK error.
-    - `on_save(session, obj)` runs before every create/update commit, for validation
-      (raise `HTTPException`) or side effects on other rows.
+    - `on_save(session, obj, user)` runs before every create/update commit, for validation
+      (raise `HTTPException`), stamping who changed it, or side effects on other rows.
+    - `filter_hook(statement, params)` applies the filters named in `filters.custom`.
     """
     parents = parents or {}
     columns = model.__table__.columns  # type: ignore[attr-defined]
+    equality = set(filters.model_fields) - _PAGING - filters.custom
+    unknown = sorted(equality - set(columns.keys()))
+    if unknown:
+        raise TypeError(f"{filters.__name__} filters {unknown} aren't columns of {model.__name__}")
+    if filters.custom and filter_hook is None:
+        raise TypeError(f"{filters.__name__} has custom filters but no filter_hook was given")
 
     def check_parents(session: Session, values: dict[str, Any]) -> None:
         for field, parent in parents.items():
             if values.get(field) is not None:
                 get_or_404(session, parent, values[field])
 
-    def save(session: Session, obj: SQLModel) -> SQLModel:
+    def save(session: Session, obj: SQLModel, user: User) -> SQLModel:
         if on_save is not None:
-            on_save(session, obj)
+            on_save(session, obj, user)
         session.add(obj)
         try:
             session.commit()
@@ -76,14 +91,16 @@ def add_crud_routes(
         session.refresh(obj)
         return obj
 
-    def create_item(item_in: create_schema, session: SessionDep) -> Any:  # type: ignore[valid-type]
+    def create_item(item_in: create_schema, session: SessionDep, user: BoardUserDep) -> Any:  # type: ignore[valid-type]
         check_parents(session, item_in.model_dump())
-        return save(session, model.model_validate(item_in))
+        return save(session, model.model_validate(item_in), user)
 
     def list_items(session: SessionDep, params: Annotated[filters, Query()]) -> Any:  # type: ignore[valid-type]
         statement = select(model)
-        for field, value in params.model_dump(exclude=_PAGING, exclude_none=True).items():
+        for field, value in params.model_dump(include=equality, exclude_none=True).items():
             statement = statement.where(getattr(model, field) == value)
+        if filter_hook is not None:
+            statement = filter_hook(statement, params)
         statement = (
             statement.order_by(*order_by, model.id)  # type: ignore[attr-defined]
             .offset(params.offset)
@@ -94,7 +111,9 @@ def add_crud_routes(
     def get_item(item_id: int, session: SessionDep) -> Any:
         return get_or_404(session, model, item_id)
 
-    def update_item(item_id: int, item_in: update_schema, session: SessionDep) -> Any:  # type: ignore[valid-type]
+    def update_item(
+        item_id: int, item_in: update_schema, session: SessionDep, user: BoardUserDep  # type: ignore[valid-type]
+    ) -> Any:
         obj = get_or_404(session, model, item_id)
         changes = item_in.model_dump(exclude_unset=True)
         # Update schemas make every field optional, so an explicit null on a NOT NULL
@@ -107,7 +126,7 @@ def add_crud_routes(
             )
         check_parents(session, changes)
         obj.sqlmodel_update(changes)
-        return save(session, obj)
+        return save(session, obj, user)
 
     def delete_item(item_id: int, session: SessionDep) -> None:
         obj = get_or_404(session, model, item_id)

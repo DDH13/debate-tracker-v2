@@ -5,11 +5,14 @@ from sqlmodel import Session, SQLModel
 from app.core.config import settings
 from app.db.seed import seed as seed_data
 from app.db.session import engine
+from app.services.finance import ensure_default_categories
 
 
 def create() -> None:
     SQLModel.metadata.create_all(engine)
-    print("Tables created.")
+    with Session(engine) as session:
+        added = ensure_default_categories(session)
+    print(f"Tables created. {added} default finance categories added.")
 
 
 def drop() -> None:

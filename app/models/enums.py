@@ -61,3 +61,45 @@ class LeadStatus(str, Enum):
     JOINED = "joined"
     DECLINED = "declined"
     NO_RESPONSE = "no_response"
+
+
+class PersonKind(str, Enum):
+    BOARD = "board"
+    VOLUNTEER = "volunteer"
+    STAFF = "staff"
+    OTHER = "other"
+
+
+class AccountKind(str, Enum):
+    BANK = "bank"
+    CASH = "cash"
+    MOBILE_WALLET = "mobile_wallet"
+    OTHER = "other"
+
+
+class TransactionKind(str, Enum):
+    INCOME = "income"
+    EXPENSE = "expense"
+    TRANSFER = "transfer"
+
+
+class PaymentMethod(str, Enum):
+    BANK_TRANSFER = "bank_transfer"
+    CASH = "cash"
+    CARD = "card"
+    CHEQUE = "cheque"
+    ONLINE = "online"
+    OTHER = "other"
+
+
+class ReimbursementStatus(str, Enum):
+    NONE = "none"
+    # Someone paid out of their own pocket and the DC hasn't paid them back yet.
+    PENDING = "pending"
+    REIMBURSED = "reimbursed"
+
+
+class BillingCycle(str, Enum):
+    MONTHLY = "monthly"
+    QUARTERLY = "quarterly"
+    YEARLY = "yearly"
