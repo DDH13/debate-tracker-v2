@@ -145,7 +145,8 @@ def refresh_profiles(session: Session) -> RefreshResult:
         third_avg, _ = core.mean_and_stdev(agg.third_scores)
         reply_avg, _ = core.mean_and_stdev(agg.reply_scores)
         substantive_avg, _ = core.mean_and_stdev(agg.substantive_scores)
-        _, score_stdev = core.mean_and_stdev(agg.all_scores)
+        # Replies are scored on a half scale, so they would inflate the spread.
+        _, score_stdev = core.mean_and_stdev(agg.substantive_scores)
         sentiment = sentiments.get(judge_id, judge_stats.SentimentResult())
 
         session.add(

@@ -33,6 +33,11 @@ typo'd variable name is silently ignored rather than erroring, so double-check s
 | `TABBYCAT_API_KEY`     | unset      | Default Tabbycat API token, paired with `TABBYCAT_BASE_URL`.     |
 | `TABBYCAT_CACHE_DIR`   | unset      | Directory for caching Tabbycat API responses. See [caching](#caching-tabbycat-responses) below. |
 | `IMPORT_TRACE`         | `false`    | Verbose per-record tracing during a tournament import.            |
+| `CORS_ORIGINS`         | `["*"]`    | Allowed CORS origins, as a JSON list (e.g. `["https://admin.example.com"]`). |
+| `SESSION_COOKIE_NAME`  | `dt_session` | Name of the admin session cookie.                              |
+| `SESSION_TTL_DAYS`     | `14`       | How long an admin sign-in lasts.                                   |
+| `SESSION_COOKIE_SECURE` | `false`   | Mark the session cookie `Secure`. Set `true` in production (HTTPS). |
+| `SESSION_COOKIE_SAMESITE` | `lax`   | `lax` / `strict` / `none`. See [authentication](#authentication). |
 
 ## Run
 
@@ -56,10 +61,191 @@ connections hang forever instead of failing.
 make test
 ```
 
+## Authentication
+
+Reads (`GET`) on the tournament/people/stats endpoints are public. Every write on them
+(imports, merges, `/stats/refresh`, CRUD) and everything under `/api/v1/admin` needs a
+signed-in **board** user; `volunteer` users can sign in but get `403` there.
+
+```bash
+make user EMAIL=chair@example.com NAME="Chair"                  # board user, prompts for password
+make user EMAIL=vol@example.com NAME="Volunteer" ROLE=volunteer
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /auth/login` | `{email, password}` → sets an httpOnly session cookie, returns the user. |
+| `POST /auth/logout` | Revokes the session and clears the cookie. |
+| `GET /auth/me` | The signed-in user, or `401`. |
+| `/admin/users` | Board-only user management: list/create, `PATCH` (name, email, role, `is_active`), `POST /admin/users/{id}/password`. The last active board user can't be demoted or deactivated. |
+
+Sessions are server-side rows (`authsession`, only the token's sha256 is stored), so
+deactivating a user or resetting their password signs them out immediately.
+
+The cookie defaults assume the UI and API share an origin (the UI's Vite dev proxy, or a
+reverse proxy in production). If they're ever split across sites, set
+`SESSION_COOKIE_SAMESITE=none`, `SESSION_COOKIE_SECURE=true`, an explicit `CORS_ORIGINS`
+list, and add `allow_credentials=True` to the CORS middleware in `app/main.py`.
+
+## Member schools and outreach
+
+Board-only endpoints under `/api/v1/admin`, behind the [console sign-in](#authentication):
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /admin/schools?year=` | Every institution with its membership standing for `year` (default: this year): `member`, `lapsed` (member last year, not this), `former`, `never`, plus `irregular` when they've missed a year since first joining. Also the year's membership, tournament count / latest tournament, primary contact and open feedback count. |
+| `GET /admin/schools/{id}?year=` | One school: the summary above plus memberships, contacts, achievements, feedback, outreach leads and tournament history (imported tournaments merged with manual entries). |
+| `/admin/memberships`, `/admin/school-contacts`, `/admin/school-achievements`, `/admin/school-participations`, `/admin/feedback`, `/admin/outreach` | CRUD (`POST`, `GET` with filters, `GET/PATCH/DELETE /{id}`). One membership per school per year (409 on a duplicate); one primary contact per school. |
+| `POST /admin/outreach/{id}/convert` | Turns a lead into a member school in one step: links or finds (by name key) or creates the institution, adds the year's membership (reusing an existing one), and adds the lead's contact person. |
+
+Fees are LKR decimals and come back as strings (`"7500.00"`). Institutions also have public
+`kind` (school / university / other) and `district` fields.
+
+## Finance and DC people
+
+Board-only, under `/api/v1/admin`. Amounts are LKR decimals returned as strings; a
+transaction can also carry the `original_amount` + `original_currency` actually paid (a USD
+Zoom bill).
+
+| Endpoint | Purpose |
+|---|---|
+| `/admin/people` | CRUD for the DC's own people (board, volunteers, staff). Squad debaters are `Debater`s and school contacts live per school, so neither is here. A console user links to a person via `person_id` on `/admin/users`. |
+| `/admin/accounts`, `/admin/finance-categories` | CRUD. An account has an opening balance as of an `opening_date`. Categories are income or expense; the defaults are seeded at startup and by `make db-create`. Deleting either while transactions or subscriptions use it is a 409 — deactivate instead. |
+| `/admin/transactions` | The ledger: CRUD with filters (`kind`, `category_id`, `account_id` on either side of a transfer, `reimbursement_status`, `paid_by_person_id`, `membership_id`, `subscription_id`, `institution_id`, `tournament_id`, `trip_id`, `date_from`, `date_to`, `q`). Newest first. An expense can be tagged to a trip (`trip_id` + `trip_cost_category`, optional `trip_traveller_id`). |
+| `GET /admin/transactions/export.csv` | The same filters as a CSV download (no paging). Text cells starting with `= + - @` are prefixed with `'` so spreadsheets don't run them as formulas. |
+| `POST /admin/transactions/{id}/mark-reimbursed` | Pays back a pending reimbursement: date and the account it was paid from. |
+| `/admin/subscriptions`, `POST /admin/subscriptions/{id}/record-payment` | Recurring bills. Recording a payment adds the expense (prefilled from the subscription) and moves `next_renewal_on` on one cycle (31 Jan + 1 month = 28/29 Feb). |
+| `POST /admin/memberships/{id}/record-payment` | Adds a membership fee as income (category "Membership fees", linked to the membership and school) and fills the membership's blank `paid_on` / `fee_lkr`. Once per membership. |
+| `GET /admin/finance/summary?start=&end=` | Income, expenses and net for the period (default: this calendar year), by month and by category, plus what's owed to people, the monthly recurring cost of active subscriptions, renewals overdue or due in 30 days, and account balances. |
+| `GET /admin/finance/balances?as_of=` | Account balances. |
+
+Ledger rules (422 when broken): income and expenses need a category of the same kind;
+a transfer needs two different accounts and no category; every transaction needs an account
+except a **pending reimbursement** — money someone spent out of their own pocket, which
+hasn't left a DC account yet. Only expenses can be reimbursed, and a reimbursement names the
+person who paid.
+
+Balances are the opening balance plus income, minus expenses, minus transfers out, plus
+transfers in, counting only money that moved on or after the account's opening date (older
+transactions are taken as already in the opening balance). A pending reimbursement isn't
+counted until it's paid back, and then on the date it was paid back. Reports count spending
+by the date it happened, so a pending reimbursement is already an expense there.
+
+## Squads and trips
+
+Board-only, under `/api/v1/admin`. The National Team and Development Squad for each season,
+and the trips abroad (WSDC and others) with their budget, actual costs and a forecast.
+
+| Endpoint | Purpose |
+|---|---|
+| `/admin/squads` | CRUD (filters `kind`, `season`). `season` is free text such as `2025/26`; one squad per kind and season (409). |
+| `GET /admin/squads/{id}/roster` | The squad with its members (debater name, school, role, dates) and staff in one call. |
+| `/admin/squad-members` | CRUD (filters `squad_id`, `debater_id`). A debater is on a squad once (409). |
+| `/admin/squad-staff` | CRUD (filter `squad_id`): a name, a free-text role (coach, manager) and an optional `person_id`. |
+| `/admin/trips` | CRUD (filters `status`, `event`, `squad_id`). `event` is free text (`WSDC`) and groups trips for forecasts. Deleting a trip removes its travellers, budget and direct costs, but is a 409 while ledger expenses are tagged to it. |
+| `/admin/trip-travellers`, `/admin/trip-budget-lines`, `/admin/trip-direct-costs` | CRUD (filter `trip_id`). Travellers are just names. A budget line or cost may name one traveller of its own trip (422 otherwise). |
+| `GET /admin/trips/{id}/costs` | Budget, paid by the DC, paid directly, actual and variance by category and by traveller (plus a "Shared" row), with totals and per-person figures. |
+| `GET /admin/trips/forecast?event=&travellers=&exclude_trip_id=` | Per-person cost of past completed trips with the same event, averaged by category, and that average scaled to `travellers`. |
+| `POST /admin/trips/{id}/copy-budget` `{from_trip_id, scale, replace}` | Copies another trip's budget lines; `scale` multiplies by this trip's travellers ÷ the source's. |
+| `POST /admin/trips/{id}/apply-forecast` `{replace}` | Adds a budget line per forecast category, sized for this trip's travellers (422 with no history or no travellers). |
+
+Trip money comes from two sources only. **The DC pays** from its accounts: ordinary ledger
+expenses tagged with the trip, so they appear in the finance dashboard, balances and CSV
+(which gains `trip` and `trip_category` columns). **Families pay some costs directly**: these
+are recorded on the trip as direct costs and are never in the ledger, since the money never
+touched a DC account. A trip's actual cost is the two added together; a pending
+reimbursement counts as spent. Per-person figures divide by the number of travellers.
+
+## Board, tasks and workshops
+
+Board-only under `/api/v1/admin`, except `GET /api/v1/me/tasks`.
+
+| Endpoint | Purpose |
+|---|---|
+| `/admin/board-roles` | CRUD (filters `person_id`, `current`). One person's term in one role: title, responsibilities, `term_start`, `term_end` (empty while current; must not precede the start). Past terms are kept, so a person with board roles can't be deleted (409). |
+| `GET /admin/board?on=` | Roles held on a date (default today), roles starting later, and past terms (most recently ended first, with a `2023–2025` style label). |
+| `GET /admin/people/{id}/detail` | A person with their console account, board roles, tasks, workshops facilitated and the money they've paid out of pocket (and are owed). |
+| `/admin/tasks` | CRUD (filters `status`, `priority`, `assignee_person_id`, `workshop_id`, `trip_id`, `tournament_id`, `open`, `overdue`). Assigned to anyone in People; optional links to a workshop, trip or tournament. Marking a task done stamps `completed_on` (unless given); reopening clears it. |
+| `GET /me/tasks` | **Any signed-in console user** (volunteers included): the tasks of the person their account is linked to, open first. Read-only — volunteers can't change tasks. `linked: false` when the account has no person. |
+| `/admin/workshops` | CRUD (filters `status`, `year`). Date, venue, mode, status and `other_attendees` (people not from a listed school). Deleting one removes its school list and facilitators but is a 409 while ledger entries are tagged to it. |
+| `/admin/workshop-schools`, `/admin/workshop-facilitators` | CRUD (filter `workshop_id`). Attending schools with a student count; facilitators from People with a free-text role. Each once per workshop (409). |
+| `GET /admin/workshops/summary?year=` | Every workshop with schools, headcount, facilitators, income, expenses and net. |
+| `GET /admin/workshops/{id}/detail` | One workshop: schools, facilitators, headcount, its ledger entries and money totals, feedback about it and its tasks. |
+
+A workshop's money is ordinary ledger income and expenses tagged with `workshop_id` (not on
+transfers), so it also shows in the finance pages and CSV (`workshop` column). Feedback can
+be about a workshop, and a school's detail lists the workshops it attended.
+
+## Tournament operations and the judge registry
+
+Board-only under `/api/v1/admin`. Internal tournament and judge data live in admin-only side
+tables (`TournamentOps`, `TournamentRegistration`, `JudgeRecord`, `JudgeAffiliation`), never
+on `Tournament` / `Judge`, whose public models are served by the open API.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /admin/tournament-ops` | Every tournament (newest first) with schools, registrations, dropouts and judge shortfall totals. |
+| `GET /admin/tournaments/{id}/ops` | One row per school that registered or fielded teams: teams registered vs fielded, **dropouts**, judges required by the quota rule vs provided, **shortfall**, with overrides flagged; totals and the tournament's feedback. |
+| `PUT /admin/tournaments/{id}/ops-settings` | The quota rule (`teams_per_judge`: 1 judge per N teams, rounded up; default 2), `hosted_by_dc`, notes. |
+| `/admin/tournament-registrations` | CRUD (filters `tournament_id`, `institution_id`; one per school per tournament, 409). Teams registered, judges promised, dropout notes, and optional overrides for teams fielded, judges provided and judges required. |
+| `GET /admin/judges/registry?q=&level=&institution_id=` | Every judge with their level, affiliation count and involvement, most recently active first. Unpaginated. |
+| `GET /admin/judges/{id}/detail` | A judge's level and notes, affiliations, involvement, per-tournament history, materialized profile (if computed) and feedback. |
+| `PUT /admin/judges/{id}/record` | Sets the board's level (trainee → chief adjudicator), experience notes and notes. |
+| `/admin/judge-affiliations` | CRUD (filters `judge_id`, `institution_id`): a school, a connection (student, alumnus, coach, teacher, other) and years. |
+
+How the ops figures are derived:
+
+- **Teams fielded** = the school's teams in the imported tab; **judges provided** = distinct
+  judges from the school who sat on at least one panel of the tournament **not as a
+  trainee**. A registration's overrides replace either.
+- **Judges required** = ceil(teams fielded ÷ `teams_per_judge`), unless overridden. A school
+  that registered but fielded nobody owes no judges.
+- **Dropouts** = registered − fielded (never negative); **shortfall** = required − provided.
+- Until a tournament's tab is imported (it has no teams), fielded and provided are
+  *unknown*, not zero, so no dropouts or shortfalls are invented; the requirement then
+  comes from the registered teams.
+
+Judge involvement (tournaments, debates, prelims / elims, chairs, trainee panels, last
+tournament) is computed live from the imported panels; scores and dissent rates come from
+the materialized profiles and need `POST /stats/refresh`.
+
+## Importing a year's school registrations
+
+Schools register each year through the DC's Google Form. Export the responses tab as CSV
+(File → Download → CSV) and import it — a **dry run by default**:
+
+```bash
+make import-registrations CSV=reg-2025.csv YEAR=2025
+```
+
+Each row resolves to an institution by exact name key (`St. Joseph's` = `St Josephs`). Rows
+with only *similar* matches are listed as AMBIGUOUS with suggestions and block the import —
+fuzzy matches are never applied automatically. Decide them in a JSON mapping file
+(`<institution id>` to link, `"new"` to create) and apply:
+
+```json
+{"WESLEY COLLEGE COLOMBO": 108, "Gateway College, Kandy": "new"}
+```
+
+```bash
+make import-registrations CSV=reg-2025.csv YEAR=2025 MAP=map-2025.json ARGS="--paid-on-submission --apply"
+```
+
+Per school this creates the year's membership (registration date, payment proof and request
+letter links; several submissions for one school collapse into one membership), adds each
+representative as a contact (WhatsApp numbers normalized to `+94…`, a teacher in charge
+preferred as primary), and closes the school's open outreach leads. `--fee 5000` records a
+fee; `--paid-on-submission` marks memberships paid on the submission date when a payment
+proof is attached. Re-running the same sheet changes nothing, and existing values are only
+ever filled in, never overwritten.
+
+Keep the CSV and mapping file out of the repo — they hold students' contact details, and the
+mapping's ids are specific to one database.
+
 ## Database management
 
 ```bash
-make db-create    # create tables (SQLModel.metadata.create_all)
+make db-create    # create tables (SQLModel.metadata.create_all) + default finance categories
 make db-seed      # load sample data (app/db/seed.py)
 make db-drop      # drop all tables — prompts for confirmation
 make db-truncate  # delete all rows, keep schema — prompts for confirmation
@@ -90,6 +276,37 @@ doesn't map is skipped rather than aborting the import — check the response's 
 list. Importing is a one-shot operation: there's no `tabbycat_id` column to make it
 idempotent, so re-importing the same slug raises a 409.
 
+### Identity matching
+
+Names are normalized before matching (HTML stripped, Unicode/quotes/dashes/whitespace
+cleaned; all-lower or all-upper person names are title-cased, mixed case is kept):
+
+- **Institutions** match an existing row when their key (lowercase, letters and digits only)
+  is equal, so "St. Peter's College" reuses "St Peters College". Fuzzy similarity is never
+  used to auto-match — only the `/institutions/similar` search uses it.
+- **People** match by email, else by case-insensitive full name *and* institution. When a
+  person is created while the same name already exists under another institution, the
+  `skipped` list gets a "possible duplicate of #12 (Royal College), ..." note — review those
+  with the merge tooling below.
+- Motion text and info slides are stripped of HTML.
+
+The report's `resolutions` list shows, for every upstream institution, debater and judge,
+which local row it resolved to and how (`created`, `email`, `name+institution`,
+`institution-key`).
+
+### Previewing an import
+
+`POST /api/v1/tournaments/import/preview` takes the same body as `/import`, runs the whole
+import, then **rolls it back**, returning the normal report (counts, `skipped`,
+`resolutions`) without writing anything. With `TABBYCAT_CACHE_DIR` set, a following real
+import replays from the cache, so previewing costs no extra upstream calls.
+
+```bash
+curl -X POST localhost:8000/api/v1/tournaments/import/preview \
+  -H 'Content-Type: application/json' \
+  -d '{"base_url":"https://<instance>.calicotab.com","slug":"<slug>"}'
+```
+
 ### Caching Tabbycat responses
 
 Set `TABBYCAT_CACHE_DIR` in `.env` to cache every upstream GET response to disk, keyed
@@ -107,3 +324,42 @@ importer locally without risking the upstream site's rate limits.
 - **On**: set `TABBYCAT_CACHE_DIR` to a directory path and restart the app.
 - **Force a fresh pull**: delete the cache dir, or just the tournament's slug subfolder
   inside it, then re-run the import.
+
+## Merging duplicates
+
+Imports can leave duplicate people and institutions. These endpoints find and fold them
+together; each merge is a single transaction, so a failure changes nothing.
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /debaters?q=` | The public debater list takes `q`: a case-insensitive "name contains" search (also `institution_id`, `offset`, `limit`), used by the console's squad picker. |
+| `GET /debaters/duplicates?by=name\|name_birthdate` | Groups of debaters sharing a (case-insensitive) name, optionally also a birthdate. |
+| `GET /judges/duplicates` | Same, for judges. |
+| `GET /institutions/similar?name=&threshold=0.8` | Institutions with Jaro-Winkler ≥ `threshold` or a substring match, best first. |
+| `GET /debaters/merge-info`, `/judges/merge-info`, `/institutions/merge-info` | Unpaginated admin lists (by name) with the context needed to decide a merge: debates/teams, prelims/elims/tournaments judged, team names. |
+| `POST /debaters/merge` `{source_id, target_id}` | Moves the source's scores, team memberships and squad memberships onto the target, fills the target's empty fields from the source, deletes the source (and its profile). |
+| `POST /judges/merge` `{source_id, target_id}` | Moves ballots and panel links, same field-filling. |
+| `POST /institutions/merge` `{target_id, source_ids}` | Reassigns teams, debaters and judges; copies `code` if the target has none. |
+
+Errors: `404` for a missing ID, `422` when source equals target (or `source_ids` is empty),
+`409` when the records are provably different people — two debaters with scores on the same
+ballot, or two judges on the same panel / with ballots for the same debate. Run
+`POST /stats/refresh` afterwards to rebuild the materialized profiles.
+
+`DELETE /judges/{id}` now returns `409` for a judge who has ballots or panel assignments, and
+both person deletes remove a leftover profile row instead of failing on its foreign key.
+
+## Score and history queries
+
+All grouped per tournament (id, name, abbreviation, date). "Counted" means from a
+non-discarded, non-forfeit ballot.
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /debaters/{id}/scores?include_replies=false&normalized=false` | Every counted score per round (judge, side, position, score). `normalized=true` returns the tab's round scores instead (panel mean, replies dropped, iron max) with an `is_iron` flag. |
+| `GET /stats/debater-scores?normalized=` | The same for every debater. |
+| `GET /debaters/{id}/debates?stage=prelim\|elim` | Debates with side, opponent team and result. |
+| `GET /debaters/{id}/teams` | Teams joined with their tournament. |
+| `GET /judges/{id}/scores?include_replies=false` | Scores the judge gave, per round. |
+| `GET /judges/{id}/debates?stage=` | Panel memberships (chair/trainee, whether a ballot was submitted). |
+| `GET /stats/tournament-averages` | Mean and count of counted substantive prelim scores per tournament. |

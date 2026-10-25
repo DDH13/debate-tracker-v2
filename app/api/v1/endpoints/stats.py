@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlmodel import select
 
@@ -13,6 +15,7 @@ from app.models import (
     Tournament,
 )
 from app.services import stats
+from app.services.stats.core import display_name
 
 router = APIRouter(tags=["stats"])
 
@@ -177,3 +180,71 @@ def get_head_to_head(
 def get_institution_stats(institution_id: int, session: SessionDep) -> stats.InstitutionStats:
     get_or_404(session, Institution, institution_id)
     return stats.institution_stats(session, institution_id)
+
+
+# --- Raw score and history queries ---
+
+
+@router.get("/debaters/{debater_id}/scores", response_model=stats.DebaterScores)
+def get_debater_scores(
+    debater_id: int,
+    session: SessionDep,
+    include_replies: bool = False,
+    normalized: bool = False,
+) -> stats.DebaterScores:
+    """Counted speaker scores grouped per tournament. Raw mode lists every judge's score;
+    `normalized=true` returns the tab's round scores (panel mean, replies dropped, iron max)."""
+    debater = get_or_404(session, Debater, debater_id)
+    results = stats.debater_scores(
+        session, debater_id, normalized=normalized, include_replies=include_replies
+    )
+    if results:
+        return results[0]
+    return stats.DebaterScores(
+        debater_id=debater_id,
+        name=display_name(debater.full_name, debater.first_name, debater.last_name),
+        normalized=normalized,
+        tournaments=[],
+    )
+
+
+@router.get("/stats/debater-scores", response_model=list[stats.DebaterScores])
+def list_debater_scores(
+    session: SessionDep, normalized: bool = False, include_replies: bool = False
+) -> list[stats.DebaterScores]:
+    return stats.debater_scores(session, normalized=normalized, include_replies=include_replies)
+
+
+@router.get("/debaters/{debater_id}/debates", response_model=list[stats.TournamentDebates])
+def get_debater_debates(
+    debater_id: int, session: SessionDep, stage: Literal["prelim", "elim"] | None = None
+) -> list[stats.TournamentDebates]:
+    get_or_404(session, Debater, debater_id)
+    return stats.debater_debates(session, debater_id, stage)
+
+
+@router.get("/debaters/{debater_id}/teams", response_model=list[stats.DebaterTeam])
+def get_debater_teams(debater_id: int, session: SessionDep) -> list[stats.DebaterTeam]:
+    get_or_404(session, Debater, debater_id)
+    return stats.debater_teams(session, debater_id)
+
+
+@router.get("/judges/{judge_id}/scores", response_model=list[stats.TournamentJudgeScores])
+def get_judge_scores(
+    judge_id: int, session: SessionDep, include_replies: bool = False
+) -> list[stats.TournamentJudgeScores]:
+    get_or_404(session, Judge, judge_id)
+    return stats.judge_scores(session, judge_id, include_replies)
+
+
+@router.get("/judges/{judge_id}/debates", response_model=list[stats.TournamentJudgeDebates])
+def get_judge_debates(
+    judge_id: int, session: SessionDep, stage: Literal["prelim", "elim"] | None = None
+) -> list[stats.TournamentJudgeDebates]:
+    get_or_404(session, Judge, judge_id)
+    return stats.judge_debates(session, judge_id, stage)
+
+
+@router.get("/stats/tournament-averages", response_model=list[stats.TournamentAverage])
+def get_tournament_averages(session: SessionDep) -> list[stats.TournamentAverage]:
+    return stats.tournament_averages(session)

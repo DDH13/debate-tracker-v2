@@ -107,11 +107,14 @@ def compute_debater_aggregates(session: Session) -> dict[int, DebaterAggregate]:
 
         prelim_detailed = core.round_scores_with_iron(session, tournament_id, elimination=False)
         elim_detailed = core.round_scores_with_iron(session, tournament_id, elimination=True)
-        for detailed in (prelim_detailed, elim_detailed):
+        for is_elim, detailed in ((False, prelim_detailed), (True, elim_detailed)):
             for debater_id, rounds in detailed.items():
                 agg = aggregates[debater_id]
                 for score, is_iron in rounds.values():
-                    agg.speech_scores.append(score)
+                    # Speaker averages (and everything derived from them) are prelim-only,
+                    # as in v1; iron-person counts still cover prelims and elims.
+                    if not is_elim:
+                        agg.speech_scores.append(score)
                     if is_iron:
                         agg.iron_person_count += 1
 
