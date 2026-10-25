@@ -25,6 +25,7 @@ from app.models import (
     SchoolContact,
     SchoolParticipation,
     SpeakerScore,
+    SquadMember,
     Team,
     TeamMember,
     Tournament,
@@ -107,6 +108,17 @@ def merge_debaters(session: Session, source_id: int, target_id: int) -> Debater:
                 member.debater_id = target_id
                 target_team_ids.add(member.team_id)
                 session.add(member)
+
+        target_squad_ids = set(
+            session.exec(select(SquadMember.squad_id).where(SquadMember.debater_id == target_id)).all()
+        )
+        for squad_member in session.exec(select(SquadMember).where(SquadMember.debater_id == source_id)).all():
+            if squad_member.squad_id in target_squad_ids:
+                session.delete(squad_member)
+            else:
+                squad_member.debater_id = target_id
+                target_squad_ids.add(squad_member.squad_id)
+                session.add(squad_member)
 
         _fill_null_fields(target, source, _PERSON_FIELDS)
         session.add(target)

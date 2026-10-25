@@ -117,6 +117,32 @@ is covered automatically, and a new public write must be added there deliberatel
     `record_membership_payment`, `mark_reimbursed` — are hand-written endpoints. The service
     raises `FinanceInvalid` / `FinanceConflict`; `finance_errors()` maps them to 422 / 409.
     The CSV export escapes formula-leading cells (`csv_cell`).
+  - Squads (`admin/squads.py`, `app/services/squads.py`): `Squad` (kind national /
+    development + a free-text `season` such as `2025/26`, unique per kind), `SquadMember`
+    (a `Debater`, role, dates; unique per squad) and `SquadStaff` (a name + free-text role,
+    optional `person_id`). `GET /admin/squads/{id}/roster` returns the squad with debater and
+    school names in one call. Squad lists order by season only: enum columns sort by name on
+    SQLite but by declaration order on Postgres, so never rely on ordering by an enum.
+  - Trips (`admin/trips.py`, `app/services/trips.py`): `Trip` (free-text `event` such as
+    `WSDC` groups trips for forecasts), `TripTraveller` (just a name: not linked to debaters,
+    judges or people), `TripBudgetLine` and `TripDirectCost`. **A trip's actual cost has two
+    sources.** The DC pays from its accounts: ledger expenses carrying `Transaction.trip_id` +
+    `trip_cost_category` (+ optional `trip_traveller_id`; a pending reimbursement counts,
+    it's spent). Families pay some costs directly: `TripDirectCost`, which is deliberately
+    **never a ledger transaction** because the money never touched a DC account, so the
+    finance dashboard and balances only see the DC's own spending. `trip_costs()` adds both
+    per category and per traveller (plus a "Shared" row for lines naming nobody) and divides
+    by the traveller count for per-person figures. `trip_forecast()` averages per-person cost
+    by category across completed same-event trips (case-insensitive) that had travellers and
+    some actual cost, then scales to a traveller count; `apply_forecast` / `copy_budget`
+    (optionally scaled by travellers ÷ source travellers) write budget lines. The rules live
+    in the service (`TripInvalid` / `TripConflict`, mapped to 422 / 409 by `trip_errors()`).
+    Trip fields on a transaction are validated in `validate_transaction()`: expenses only, a
+    category whenever a trip is set, and the traveller must be on that trip. Budget lines and
+    direct costs check the same traveller rule in their `on_save`.
+  - `add_crud_routes` also takes an optional `before_delete(session, obj)` hook, used by
+    trips to refuse a delete with a clear message ("unlink or delete its N ledger expenses
+    first") before the FK would produce a generic 409.
   - `Person` (`admin/people.py`) is the DC's own people; `User.person_id` links a console
     account to one (`ON DELETE SET NULL`). Transactions and subscriptions reference people
     without a cascade, so a named person can't be deleted (409).
@@ -140,6 +166,15 @@ is covered automatically, and a new public write must be added there deliberatel
   for the same year rather than dropping one. `Transaction.institution_id` /
   `tournament_id` / `membership_id` are `SET NULL` (the money still happened) and the
   institution merge repoints them.
+- **Debater FKs**: `SquadMember.debater_id` is a plain FK. `merge_debaters` repoints it and,
+  when both debaters are on the same squad, drops the source's row (like `TeamMember`);
+  `delete_debater` is a 409 while the debater is on a squad. Trip links are lenient where the
+  history should survive: `Trip.squad_id` / `tournament_id` and `TripTraveller` links on
+  budget lines, direct costs and transactions are `SET NULL`; trip children cascade with the
+  trip; `Transaction.trip_id` is a plain FK, so deleting a trip that has ledger expenses is a
+  409. Adding the trip columns to an existing dev database is a one-off additive `ALTER`
+  (see Schema changes). Public `GET /debaters` takes `q` (case-insensitive name contains,
+  LIKE wildcards escaped) so the console's roster picker can search server-side.
 - Schema changes: there are no migrations. `create_all` adds new tables on startup but never
   new columns, so a new column on an existing table needs a dev DB reset or a one-off
   `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`. Enum columns are native Postgres enums whose

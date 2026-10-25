@@ -111,7 +111,7 @@ Zoom bill).
 |---|---|
 | `/admin/people` | CRUD for the DC's own people (board, volunteers, staff). Squad debaters are `Debater`s and school contacts live per school, so neither is here. A console user links to a person via `person_id` on `/admin/users`. |
 | `/admin/accounts`, `/admin/finance-categories` | CRUD. An account has an opening balance as of an `opening_date`. Categories are income or expense; the defaults are seeded at startup and by `make db-create`. Deleting either while transactions or subscriptions use it is a 409 — deactivate instead. |
-| `/admin/transactions` | The ledger: CRUD with filters (`kind`, `category_id`, `account_id` on either side of a transfer, `reimbursement_status`, `paid_by_person_id`, `membership_id`, `subscription_id`, `institution_id`, `date_from`, `date_to`, `q`). Newest first. |
+| `/admin/transactions` | The ledger: CRUD with filters (`kind`, `category_id`, `account_id` on either side of a transfer, `reimbursement_status`, `paid_by_person_id`, `membership_id`, `subscription_id`, `institution_id`, `tournament_id`, `trip_id`, `date_from`, `date_to`, `q`). Newest first. An expense can be tagged to a trip (`trip_id` + `trip_cost_category`, optional `trip_traveller_id`). |
 | `GET /admin/transactions/export.csv` | The same filters as a CSV download (no paging). Text cells starting with `= + - @` are prefixed with `'` so spreadsheets don't run them as formulas. |
 | `POST /admin/transactions/{id}/mark-reimbursed` | Pays back a pending reimbursement: date and the account it was paid from. |
 | `/admin/subscriptions`, `POST /admin/subscriptions/{id}/record-payment` | Recurring bills. Recording a payment adds the expense (prefilled from the subscription) and moves `next_renewal_on` on one cycle (31 Jan + 1 month = 28/29 Feb). |
@@ -130,6 +130,31 @@ transfers in, counting only money that moved on or after the account's opening d
 transactions are taken as already in the opening balance). A pending reimbursement isn't
 counted until it's paid back, and then on the date it was paid back. Reports count spending
 by the date it happened, so a pending reimbursement is already an expense there.
+
+## Squads and trips
+
+Board-only, under `/api/v1/admin`. The National Team and Development Squad for each season,
+and the trips abroad (WSDC and others) with their budget, actual costs and a forecast.
+
+| Endpoint | Purpose |
+|---|---|
+| `/admin/squads` | CRUD (filters `kind`, `season`). `season` is free text such as `2025/26`; one squad per kind and season (409). |
+| `GET /admin/squads/{id}/roster` | The squad with its members (debater name, school, role, dates) and staff in one call. |
+| `/admin/squad-members` | CRUD (filters `squad_id`, `debater_id`). A debater is on a squad once (409). |
+| `/admin/squad-staff` | CRUD (filter `squad_id`): a name, a free-text role (coach, manager) and an optional `person_id`. |
+| `/admin/trips` | CRUD (filters `status`, `event`, `squad_id`). `event` is free text (`WSDC`) and groups trips for forecasts. Deleting a trip removes its travellers, budget and direct costs, but is a 409 while ledger expenses are tagged to it. |
+| `/admin/trip-travellers`, `/admin/trip-budget-lines`, `/admin/trip-direct-costs` | CRUD (filter `trip_id`). Travellers are just names. A budget line or cost may name one traveller of its own trip (422 otherwise). |
+| `GET /admin/trips/{id}/costs` | Budget, paid by the DC, paid directly, actual and variance by category and by traveller (plus a "Shared" row), with totals and per-person figures. |
+| `GET /admin/trips/forecast?event=&travellers=&exclude_trip_id=` | Per-person cost of past completed trips with the same event, averaged by category, and that average scaled to `travellers`. |
+| `POST /admin/trips/{id}/copy-budget` `{from_trip_id, scale, replace}` | Copies another trip's budget lines; `scale` multiplies by this trip's travellers ÷ the source's. |
+| `POST /admin/trips/{id}/apply-forecast` `{replace}` | Adds a budget line per forecast category, sized for this trip's travellers (422 with no history or no travellers). |
+
+Trip money comes from two sources only. **The DC pays** from its accounts: ordinary ledger
+expenses tagged with the trip, so they appear in the finance dashboard, balances and CSV
+(which gains `trip` and `trip_category` columns). **Families pay some costs directly**: these
+are recorded on the trip as direct costs and are never in the ledger, since the money never
+touched a DC account. A trip's actual cost is the two added together; a pending
+reimbursement counts as spent. Per-person figures divide by the number of travellers.
 
 ## Importing a year's school registrations
 
@@ -254,11 +279,12 @@ together; each merge is a single transaction, so a failure changes nothing.
 
 | Endpoint | Purpose |
 |----------|---------|
+| `GET /debaters?q=` | The public debater list takes `q`: a case-insensitive "name contains" search (also `institution_id`, `offset`, `limit`), used by the console's squad picker. |
 | `GET /debaters/duplicates?by=name\|name_birthdate` | Groups of debaters sharing a (case-insensitive) name, optionally also a birthdate. |
 | `GET /judges/duplicates` | Same, for judges. |
 | `GET /institutions/similar?name=&threshold=0.8` | Institutions with Jaro-Winkler ≥ `threshold` or a substring match, best first. |
 | `GET /debaters/merge-info`, `/judges/merge-info`, `/institutions/merge-info` | Unpaginated admin lists (by name) with the context needed to decide a merge: debates/teams, prelims/elims/tournaments judged, team names. |
-| `POST /debaters/merge` `{source_id, target_id}` | Moves the source's scores and team memberships onto the target, fills the target's empty fields from the source, deletes the source (and its profile). |
+| `POST /debaters/merge` `{source_id, target_id}` | Moves the source's scores, team memberships and squad memberships onto the target, fills the target's empty fields from the source, deletes the source (and its profile). |
 | `POST /judges/merge` `{source_id, target_id}` | Moves ballots and panel links, same field-filling. |
 | `POST /institutions/merge` `{target_id, source_ids}` | Reassigns teams, debaters and judges; copies `code` if the target has none. |
 

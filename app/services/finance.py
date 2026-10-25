@@ -34,6 +34,8 @@ from app.models import (
     Tournament,
     Transaction,
     TransactionKind,
+    Trip,
+    TripTraveller,
     User,
 )
 from app.models.membership import http_url
@@ -141,6 +143,22 @@ def validate_transaction(session: Session, txn: Transaction) -> None:
         raise FinanceInvalid("Only an expense can be linked to a subscription")
     if (txn.original_amount is None) != (txn.original_currency is None):
         raise FinanceInvalid("An original amount and its currency go together")
+
+    has_trip_fields = (
+        txn.trip_id is not None or txn.trip_cost_category is not None or txn.trip_traveller_id is not None
+    )
+    if has_trip_fields and txn.kind != TransactionKind.EXPENSE:
+        raise FinanceInvalid("Only an expense can be linked to a trip")
+    if txn.trip_id is None:
+        if txn.trip_cost_category is not None or txn.trip_traveller_id is not None:
+            raise FinanceInvalid("A trip cost category or traveller needs a trip")
+    else:
+        if txn.trip_cost_category is None:
+            raise FinanceInvalid("A trip expense needs a trip cost category")
+        if txn.trip_traveller_id is not None:
+            traveller = session.get(TripTraveller, txn.trip_traveller_id)
+            if traveller is not None and traveller.trip_id != txn.trip_id:
+                raise FinanceInvalid("That traveller is not on this trip")
 
 
 def stamp_transaction(txn: Transaction, user: User) -> None:
@@ -568,6 +586,8 @@ CSV_COLUMNS = (
     "reimbursed_on",
     "school",
     "tournament",
+    "trip",
+    "trip_category",
     "receipt_url",
     "notes",
 )
@@ -600,6 +620,7 @@ def transactions_csv(session: Session, rows: list[Transaction]) -> str:
     people = _names(session, Person, [r.paid_by_person_id for r in rows])
     schools = _names(session, Institution, [r.institution_id for r in rows])
     tournaments = _names(session, Tournament, [r.tournament_id for r in rows])
+    trips = _names(session, Trip, [r.trip_id for r in rows])
 
     out = io.StringIO()
     writer = csv.writer(out)
@@ -628,6 +649,8 @@ def transactions_csv(session: Session, rows: list[Transaction]) -> str:
                 r.reimbursed_on.isoformat() if r.reimbursed_on else None,
                 schools.get(r.institution_id),
                 tournaments.get(r.tournament_id),
+                trips.get(r.trip_id),
+                r.trip_cost_category,
                 r.receipt_url,
                 r.notes,
             )

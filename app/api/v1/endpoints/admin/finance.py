@@ -33,6 +33,8 @@ from app.models import (
     TransactionKind,
     TransactionPublic,
     TransactionUpdate,
+    Trip,
+    TripTraveller,
     User,
 )
 from app.services import finance as finance_service
@@ -166,6 +168,7 @@ class TransactionFilters(ListParams):
     subscription_id: int | None = None
     institution_id: int | None = None
     tournament_id: int | None = None
+    trip_id: int | None = None
     # Either side of a transfer.
     account_id: int | None = None
     date_from: date | None = None
@@ -243,6 +246,8 @@ add_crud_routes(
         "tournament_id": Tournament,
         "institution_id": Institution,
         "paid_by_person_id": Person,
+        "trip_id": Trip,
+        "trip_traveller_id": TripTraveller,
     },
     on_save=_save_transaction,
     filter_hook=_transaction_filters,

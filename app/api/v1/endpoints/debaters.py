@@ -2,7 +2,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import SQLModel, func, select
+from sqlmodel import SQLModel, col, func, or_, select
 
 from app.api.deps import SessionDep, get_or_404, merge_errors
 from app.models import (
@@ -13,6 +13,7 @@ from app.models import (
     DebaterUpdate,
     Institution,
     SpeakerScore,
+    SquadMember,
 )
 from app.services import merge
 
@@ -45,12 +46,25 @@ def create_debater(debater_in: DebaterCreate, session: SessionDep) -> Debater:
 def list_debaters(
     session: SessionDep,
     institution_id: int | None = None,
+    q: str | None = None,
     offset: int = 0,
     limit: int = Query(default=100, le=100),
 ) -> list[Debater]:
     query = select(Debater)
     if institution_id is not None:
         query = query.where(Debater.institution_id == institution_id)
+    if q and q.strip():
+        # Case-insensitive "name contains": the full name, or first + last when that's all
+        # there is. Lets a picker search thousands of debaters server-side.
+        first_last = func.trim(
+            func.coalesce(Debater.first_name, "") + " " + func.coalesce(Debater.last_name, "")
+        )
+        query = query.where(
+            or_(
+                col(Debater.full_name).icontains(q.strip(), autoescape=True),
+                first_last.icontains(q.strip(), autoescape=True),
+            )
+        )
     return session.exec(query.offset(offset).limit(limit)).all()
 
 
@@ -59,7 +73,7 @@ def list_debaters(
 
 @router.post("/merge", response_model=DebaterPublic)
 def merge_debaters(merge_in: DebaterMergeRequest, session: SessionDep) -> Debater:
-    """Fold `source_id` into `target_id`: scores and team memberships move across, null
+    """Fold `source_id` into `target_id`: scores, team and squad memberships move across, null
     fields on the target are filled from the source, and the source is deleted."""
     with merge_errors():
         return merge.merge_debaters(session, merge_in.source_id, merge_in.target_id)
@@ -104,6 +118,15 @@ def update_debater(debater_id: int, debater_in: DebaterUpdate, session: SessionD
 @router.delete("/{debater_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_debater(debater_id: int, session: SessionDep) -> None:
     debater = get_or_404(session, Debater, debater_id)
+
+    squad_count = session.exec(
+        select(func.count()).select_from(SquadMember).where(SquadMember.debater_id == debater_id)
+    ).one()
+    if squad_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot delete debater: on {squad_count} squad(s)",
+        )
 
     score_count = session.exec(
         select(func.count()).select_from(SpeakerScore).where(SpeakerScore.debater_id == debater_id)

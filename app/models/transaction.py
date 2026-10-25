@@ -4,7 +4,7 @@ from decimal import Decimal
 from pydantic import field_validator
 from sqlmodel import CheckConstraint, Field, SQLModel
 
-from app.models.enums import PaymentMethod, ReimbursementStatus, TransactionKind
+from app.models.enums import PaymentMethod, ReimbursementStatus, TransactionKind, TripCostCategory
 from app.models.membership import http_url
 
 
@@ -65,6 +65,12 @@ class Transaction(TransactionBase, table=True):
         default=None, foreign_key="institution.id", index=True, ondelete="SET NULL"
     )
     paid_by_person_id: int | None = Field(default=None, foreign_key="person.id", index=True)
+    # A trip expense. Plain FK: a trip with ledger expenses can't be deleted (409).
+    trip_id: int | None = Field(default=None, foreign_key="trip.id", index=True)
+    trip_cost_category: TripCostCategory | None = None
+    trip_traveller_id: int | None = Field(
+        default=None, foreign_key="triptraveller.id", index=True, ondelete="SET NULL"
+    )
     created_by_id: int | None = Field(default=None, foreign_key="user.id", ondelete="SET NULL")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -79,6 +85,9 @@ class TransactionCreate(TransactionBase):
     tournament_id: int | None = None
     institution_id: int | None = None
     paid_by_person_id: int | None = None
+    trip_id: int | None = None
+    trip_cost_category: TripCostCategory | None = None
+    trip_traveller_id: int | None = None
 
 
 class TransactionPublic(TransactionBase):
@@ -91,6 +100,9 @@ class TransactionPublic(TransactionBase):
     tournament_id: int | None
     institution_id: int | None
     paid_by_person_id: int | None
+    trip_id: int | None
+    trip_cost_category: TripCostCategory | None
+    trip_traveller_id: int | None
     created_by_id: int | None
     created_at: datetime
     updated_at: datetime
@@ -118,6 +130,9 @@ class TransactionUpdate(SQLModel):
     tournament_id: int | None = None
     institution_id: int | None = None
     paid_by_person_id: int | None = None
+    trip_id: int | None = None
+    trip_cost_category: TripCostCategory | None = None
+    trip_traveller_id: int | None = None
 
     _check_currency = field_validator("original_currency")(currency_code)
     _check_receipt = field_validator("receipt_url")(http_url)

@@ -103,3 +103,32 @@ class BillingCycle(str, Enum):
     MONTHLY = "monthly"
     QUARTERLY = "quarterly"
     YEARLY = "yearly"
+
+
+class SquadKind(str, Enum):
+    NATIONAL = "national"
+    DEVELOPMENT = "development"
+
+
+class SquadRole(str, Enum):
+    CAPTAIN = "captain"
+    MEMBER = "member"
+    RESERVE = "reserve"
+
+
+class TripStatus(str, Enum):
+    PLANNING = "planning"
+    CONFIRMED = "confirmed"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class TripCostCategory(str, Enum):
+    FLIGHTS = "flights"
+    VISA = "visa"
+    ACCOMMODATION = "accommodation"
+    REGISTRATION = "registration"
+    FOOD = "food"
+    LOCAL_TRANSPORT = "local_transport"
+    INSURANCE = "insurance"
+    OTHER = "other"

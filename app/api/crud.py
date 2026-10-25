@@ -38,6 +38,7 @@ class ListParams(SQLModel):
 _PAGING = {"offset", "limit"}
 
 OnSave = Callable[[Session, Any, User], None]
+BeforeDelete = Callable[[Session, Any], None]
 FilterHook = Callable[[SelectOfScalar[Any], Any], SelectOfScalar[Any]]
 
 
@@ -55,6 +56,7 @@ def add_crud_routes(
     conflict_detail: str = "Conflicts with an existing record",
     on_save: OnSave | None = None,
     filter_hook: FilterHook | None = None,
+    before_delete: BeforeDelete | None = None,
 ) -> None:
     """Registers `POST ""`, `GET ""`, `GET /{item_id}`, `PATCH /{item_id}` and
     `DELETE /{item_id}` on `router`.
@@ -64,6 +66,8 @@ def add_crud_routes(
     - `on_save(session, obj, user)` runs before every create/update commit, for validation
       (raise `HTTPException`), stamping who changed it, or side effects on other rows.
     - `filter_hook(statement, params)` applies the filters named in `filters.custom`.
+    - `before_delete(session, obj)` runs before every delete, to refuse it with a clearer
+      message than the generic FK 409 (raise `HTTPException`).
     """
     parents = parents or {}
     columns = model.__table__.columns  # type: ignore[attr-defined]
@@ -130,6 +134,8 @@ def add_crud_routes(
 
     def delete_item(item_id: int, session: SessionDep) -> None:
         obj = get_or_404(session, model, item_id)
+        if before_delete is not None:
+            before_delete(session, obj)
         session.delete(obj)
         try:
             session.commit()
