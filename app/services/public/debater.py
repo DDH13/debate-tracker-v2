@@ -312,6 +312,9 @@ def build_public_debater(session: Session, debater: Debater) -> PublicDebater:
         if debater.institution_id is not None
         else None
     )
+    if institution is None and tournaments_rows:
+        # Imported debaters often have no school of their own: use the latest team's.
+        institution = next((r.team.institution for r in tournaments_rows if r.team and r.team.institution), None)
     prelim_total = sum(prelim_wl)
     summary = DebaterSummary(
         tournaments=len({r.tournament_id for r in records} | {t.tournament_id for t in team_rows}),
