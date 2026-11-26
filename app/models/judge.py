@@ -3,7 +3,7 @@ from datetime import date
 from sqlmodel import Field, Relationship, SQLModel
 
 from app.models.institution import Institution
-from app.models.participant import ParticipantBase
+from app.models.participant import ParticipantBase, ParticipantName
 
 if TYPE_CHECKING:
     from app.models.ballot import Ballot
@@ -27,7 +27,16 @@ class JudgeCreate(JudgeBase):
     institution_id: int | None = None
 
 
-class JudgePublic(JudgeBase):
+class JudgePublic(ParticipantName):
+    """Served by the open API: no email, phone, birthdate or gender."""
+
+    id: int
+    institution_id: int | None
+
+
+class JudgeAdmin(JudgeBase):
+    """The full record, for board-only responses."""
+
     id: int
     institution_id: int | None
 

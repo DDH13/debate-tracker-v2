@@ -23,7 +23,7 @@ from app.models import (
     JudgeLevel,
     JudgeProfile,
     JudgeProfilePublic,
-    JudgePublic,
+    JudgeAdmin,
     JudgeRecord,
     JudgeRecordPublic,
     JudgeRecordUpdate,
@@ -192,7 +192,7 @@ class TournamentJudged(SQLModel):
 
 
 class JudgeDetail(SQLModel):
-    judge: JudgePublic
+    judge: JudgeAdmin
     name: str
     institution_name: str | None
     record: JudgeRecordPublic | None
@@ -241,7 +241,7 @@ def judge_detail(session: Session, judge: Judge) -> JudgeDetail:
         select(Feedback).where(Feedback.judge_id == judge.id).order_by(col(Feedback.created_at).desc())
     ).all()
     return JudgeDetail(
-        judge=JudgePublic.model_validate(judge),
+        judge=JudgeAdmin.model_validate(judge),
         name=display_name(judge),
         institution_name=school.name if school else None,
         record=JudgeRecordPublic.model_validate(record) if record else None,

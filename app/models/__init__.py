@@ -9,7 +9,7 @@ from app.models.ballot import (
 )
 from app.models.debate import Debate, DebateCreate, DebatePublic, DebateUpdate
 from app.models.debate_judge import DebateJudge, DebateJudgeCreate, DebateJudgePublic
-from app.models.debater import Debater, DebaterCreate, DebaterPublic, DebaterUpdate
+from app.models.debater import Debater, DebaterAdmin, DebaterCreate, DebaterPublic, DebaterUpdate
 from app.models.debater_profile import DebaterProfile, DebaterProfilePublic
 from app.models.enums import (
     AccountKind,
@@ -60,7 +60,7 @@ from app.models.judge_record import (
     JudgeRecordPublic,
     JudgeRecordUpdate,
 )
-from app.models.judge import Judge, JudgeCreate, JudgePublic, JudgeUpdate
+from app.models.judge import Judge, JudgeAdmin, JudgeCreate, JudgePublic, JudgeUpdate
 from app.models.judge_profile import JudgeProfile, JudgeProfilePublic
 from app.models.membership import (
     Membership,
@@ -195,6 +195,7 @@ __all__ = [
     "DebateJudgePublic",
     "Debater",
     "DebaterCreate",
+    "DebaterAdmin",
     "DebaterPublic",
     "DebaterUpdate",
     "DebaterProfile",
@@ -208,6 +209,7 @@ __all__ = [
     "InstitutionUpdate",
     "Judge",
     "JudgeCreate",
+    "JudgeAdmin",
     "JudgePublic",
     "JudgeUpdate",
     "JudgeProfile",

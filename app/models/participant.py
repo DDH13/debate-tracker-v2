@@ -3,12 +3,22 @@ from datetime import date
 from sqlmodel import SQLModel
 
 
-class ParticipantBase(SQLModel):
+class ParticipantName(SQLModel):
+    """The fields that are safe to serve publicly."""
+
     full_name: str | None = None
     first_name: str | None = None
     last_name: str | None = None
+
+
+class ParticipantPersonal(SQLModel):
+    """Personal details: only ever served by board-only (/admin and write) endpoints."""
+
     email: str | None = None
     phone: str | None = None
     birthdate: date | None = None
     gender: str | None = None
-    
+
+
+class ParticipantBase(ParticipantName, ParticipantPersonal):
+    pass

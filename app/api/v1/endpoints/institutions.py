@@ -74,11 +74,6 @@ def similar_institutions(
     return institution_service.similar_institutions(session, name, threshold)
 
 
-@router.get("/merge-info", response_model=list[merge.InstitutionMergeInfo])
-def institution_merge_info(session: SessionDep) -> list[merge.InstitutionMergeInfo]:
-    return merge.institution_merge_info(session)
-
-
 @router.get("/{institution_id}", response_model=InstitutionPublic)
 def get_institution(institution_id: int, session: SessionDep) -> Institution:
     return get_or_404(session, Institution, institution_id)
