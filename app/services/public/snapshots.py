@@ -5,6 +5,7 @@ brackets and per-team finishes are worked out, and it is cached as plain values.
 """
 
 from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass, field
 
 from sqlmodel import Session, select
@@ -88,7 +89,10 @@ class TournamentSnapshot:
 
 
 def elim_rounds_by_tournament(
-    session: Session, tournament_id: int | None = None
+    session: Session,
+    tournament_id: int | None = None,
+    *,
+    tournament_ids: Collection[int] | None = None,
 ) -> dict[int, list[ElimRound]]:
     """Every elimination round with its debates, grouped by tournament, in one query."""
     statement = (
@@ -108,6 +112,8 @@ def elim_rounds_by_tournament(
     )
     if tournament_id is not None:
         statement = statement.where(Round.tournament_id == tournament_id)
+    if tournament_ids is not None:
+        statement = statement.where(Round.tournament_id.in_(list(tournament_ids) or [-1]))
     rounds: dict[int, dict[int, ElimRound]] = defaultdict(dict)
     for tid, round_id, seq, name, debate_id, prop, opp, winner in session.exec(statement).all():
         elim_round = rounds[tid].setdefault(

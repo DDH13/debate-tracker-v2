@@ -63,6 +63,52 @@ is covered automatically, and a new public write must be added there deliberatel
 - `app/services/stats/` — pure computation over ballots/debates for tournament, debater,
   and judge statistics. `history.py` holds the raw score / debate / team history queries
   (per-tournament groupings) built on `core`.
+- **Public site API** (`app/api/v1/endpoints/public/`, builders in `app/services/public/`, mounted at
+  `/api/v1/public` with `require_board_for_writes`): one response per page, so the UI never
+  makes a request per row. Endpoints: `tournaments/{id}`, `debates` (explorer) and
+  `debates/{id}`, `debaters/{id}`, `judges/{id}`, `institutions/{id}`, the paged lists
+  (`/debaters`, `/judges`, `/institutions`, `/tournaments`: `{total, offset, limit, items}`,
+  `limit` default 25 max 100, `sort` is a `Literal` whitelist so an unknown value is a 422,
+  ordering is `nulls_last` then id) and `search?q=` (>= 2 chars after strip, `icontains` with
+  autoescape, prefix matches first, one query per kind). Static paths are declared before
+  `/{id}` in each router. Module map: `schemas.py` (shared refs, `Metric {value, field_mean,
+  delta, percentile}`, `WinLoss`), `loaders.py` (batched name/ref lookups), `scores.py`
+  (`debate_margins` / `debate_votes`, grouped, discarded ballots excluded), `snapshots.py`
+  (`tournament_snapshot`: tab incl. unranked rows, standings, brackets, finishes, shared by the
+  tournament, debater and school pages), `brackets.py` (`derive_brackets`, pure), `field.py`
+  (field means behind every "vs field" delta; `institution_aggregates`), `cache.py`.
+  - **Privacy**: `DebaterPublic` / `JudgePublic` carry only id, name fields and institution; email,
+    phone, birthdate and gender live on `ParticipantPersonal` and are served only by the
+    `DebaterAdmin` / `JudgeAdmin` models (POST / PATCH / merge responses, `JudgeDetail.judge`,
+    `GET /admin/debaters[/{id}]`, `GET /admin/judges[/{id}]`). The duplicate finders and
+    merge-info lists moved under `/admin` (`/admin/debaters/duplicates`, `/merge-info`, same for
+    judges and `/admin/institutions/merge-info`). `tests/test_privacy.py` walks the OpenAPI
+    schema and fails if any non-admin GET response has a property named `email`, `phone`,
+    `birthdate` or `gender`, so a new public response can't leak them by accident.
+  - **Brackets**: elimination rounds are a flat list with no bracket id, and the last elim round
+    isn't always the final (real data: a novice bracket runs after the Grand Final).
+    `derive_brackets` groups rounds by overlap of still-alive teams; a team's finish is its depth
+    from its bracket's final (champion / finalist / semi / quarter / octo / broke); no champion
+    unless the last round is one decided debate; the bracket with the most teams is `primary`.
+    School titles / finals / breaks count the primary bracket only.
+  - **Data sources**: a debater's or judge's own history is computed live (current right after an
+    import); percentile, rank, sentiment and the field means come from the materialized
+    profiles, so pages return `profile_computed_at: null` (not 404) before `POST /stats/refresh`.
+    Institution win/loss excludes intra-school debates; speeches are credited to the school of
+    the team represented that day. `SchoolParticipation` is shown on school pages but never its
+    `notes`; `SchoolAchievement` stays private.
+  - **Cache**: `cache.cached(key, build)` is an in-process TTL cache
+    (`settings.public_cache_ttl_seconds`, default 120, 0 disables) holding only snapshots and
+    field data as plain values. Middleware in `app/main.py` clears it after any successful
+    non-GET request and adds `Cache-Control: public, max-age=60, stale-while-revalidate=300` to
+    `/api/v1/public` GETs. Each gunicorn worker has its own cache, so the TTL bounds staleness.
+    `conftest.py` sets the TTL to 0.
+  - **No query per row**: `tests/helpers.py` has `count_queries` / `assert_constant_queries`
+    (SQLAlchemy `before_cursor_execute`); every page endpoint's test asserts its query count
+    doesn't grow between a 4-team and an 8-team tournament. Keep it that way.
+  - `team_standings` ranks by prelim wins then total speaks (Tabbycat order), not average speaks.
+  - `make db-indexes` (`scripts/db.py indexes`) adds the model indexes missing from an existing
+    database; `create_all` never adds indexes to existing tables. Create-if-not-exists only.
 - `app/services/text.py` — pure name/text normalization (`normalize_text`, `name_key`,
   `split_name`, `tidy_case`, `institution_key`, `jaro_winkler`). No DB access.
 - `app/services/institutions.py` — `find_matching_institution` (key equality, used by the
