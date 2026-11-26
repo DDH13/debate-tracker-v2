@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     import_trace: bool = False
     tabbycat_cache_dir: str | None = None
     cors_origins: list[str] = ["*"]
+    # In-process TTL cache behind the /public pages (tournament snapshots, field means).
+    # 0 disables it. Each gunicorn worker has its own copy, so a write elsewhere is picked up
+    # at the latest after this many seconds.
+    public_cache_ttl_seconds: int = 120
     session_cookie_name: str = "dt_session"
     session_ttl_days: int = 14
     # True in production (HTTPS). A split UI/API deployment also needs samesite="none".

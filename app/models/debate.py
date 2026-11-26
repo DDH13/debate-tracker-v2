@@ -20,9 +20,9 @@ class Debate(DebateBase, table=True):
     __table_args__ = (CheckConstraint("prop_team_id != opp_team_id"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    round_id: int = Field(foreign_key="round.id")
-    prop_team_id: int = Field(foreign_key="team.id")
-    opp_team_id: int = Field(foreign_key="team.id")
+    round_id: int = Field(foreign_key="round.id", index=True)
+    prop_team_id: int = Field(foreign_key="team.id", index=True)
+    opp_team_id: int = Field(foreign_key="team.id", index=True)
 
     round: "Round" = Relationship(back_populates="debates")
     prop_team: "Team" = Relationship(

@@ -19,8 +19,8 @@ class Ballot(BallotBase, table=True):
     __table_args__ = (UniqueConstraint("debate_id", "judge_id"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    debate_id: int = Field(foreign_key="debate.id")
-    judge_id: int = Field(foreign_key="judge.id")
+    debate_id: int = Field(foreign_key="debate.id", index=True)
+    judge_id: int = Field(foreign_key="judge.id", index=True)
     discarded: bool = False
     forfeit: bool = False
 

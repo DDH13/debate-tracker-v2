@@ -16,7 +16,7 @@ class DebaterBase(ParticipantBase):
 
 class Debater(DebaterBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    institution_id: int | None = Field(default=None, foreign_key="institution.id")
+    institution_id: int | None = Field(default=None, foreign_key="institution.id", index=True)
 
     institution: Institution | None = Relationship(back_populates="debaters")
     team_links: list["TeamMember"] = Relationship(

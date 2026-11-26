@@ -16,6 +16,7 @@ from app.services.auth import create_auth_session
 settings.init_db_on_startup = False  # never create tables or seed rows in the .env database
 settings.seed_on_startup = False
 settings.tabbycat_cache_dir = None  # tests must always hit the respx-mocked client fresh
+settings.public_cache_ttl_seconds = 0  # every test builds its own data; nothing may be cached across them
 
 
 @pytest.fixture(name="session")

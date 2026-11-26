@@ -5,6 +5,7 @@ Everything else in `app.services.stats` is built on `round_scores`, `participati
 """
 
 from collections import defaultdict
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from statistics import pstdev
 from typing import TypeVar
@@ -31,12 +32,44 @@ class Participation:
     won: bool | None  # None when the debate has no recorded winner
 
 
+def position_averages(
+    rows: Iterable[tuple[int, int, int, float]],
+) -> dict[int, dict[int, dict[int, float]]]:
+    """{debater_id: {round_id: {position: panel-averaged score}}} from raw
+    `(debater_id, round_id, position, final_score)` rows, replies dropped."""
+    panel_buckets: dict[tuple[int, int, int], list[float]] = defaultdict(list)
+    for debater_id, round_id, position, final_score in rows:
+        if position == SpeakerPosition.REPLY:
+            continue
+        panel_buckets[(debater_id, round_id, int(position))].append(final_score)
+
+    result: dict[int, dict[int, dict[int, float]]] = defaultdict(lambda: defaultdict(dict))
+    for (debater_id, round_id, position), values in panel_buckets.items():
+        result[debater_id][round_id][position] = sum(values) / len(values)
+    return {d: dict(rounds) for d, rounds in result.items()}
+
+
+def normalize_round_scores(
+    rows: Iterable[tuple[int, int, int, float]],
+) -> dict[int, dict[int, tuple[float, bool]]]:
+    """v1's three normalizations over raw `(debater_id, round_id, position, final_score)` rows:
+    panel mean, reply drop, then iron merge (max over the positions spoken that round).
+    Returns {debater_id: {round_id: (score, is_iron)}}."""
+    return {
+        debater_id: {
+            round_id: (max(positions.values()), len(positions) > 1)
+            for round_id, positions in rounds.items()
+        }
+        for debater_id, rounds in position_averages(rows).items()
+    }
+
+
 def _round_position_averages(
     session: Session, tournament_id: int, *, elimination: bool
 ) -> dict[int, dict[int, dict[int, float]]]:
     """{debater_id: {round_id: {position: panel-averaged score}}}, replies already dropped."""
     statement = (
-        select(SpeakerScore, Debate.round_id)
+        select(SpeakerScore.debater_id, Debate.round_id, SpeakerScore.position, SpeakerScore.final_score)
         .join(Ballot, SpeakerScore.ballot_id == Ballot.id)
         .join(Debate, Ballot.debate_id == Debate.id)
         .join(Round, Debate.round_id == Round.id)
@@ -47,18 +80,7 @@ def _round_position_averages(
             Ballot.forfeit == False,  # noqa: E712
         )
     )
-    rows = session.exec(statement).all()
-
-    panel_buckets: dict[tuple[int, int, int], list[float]] = defaultdict(list)
-    for score, round_id in rows:
-        if score.position == SpeakerPosition.REPLY:
-            continue
-        panel_buckets[(score.debater_id, round_id, score.position)].append(score.final_score)
-
-    result: dict[int, dict[int, dict[int, float]]] = defaultdict(lambda: defaultdict(dict))
-    for (debater_id, round_id, position), values in panel_buckets.items():
-        result[debater_id][round_id][position] = sum(values) / len(values)
-    return {d: dict(rounds) for d, rounds in result.items()}
+    return position_averages(session.exec(statement).all())
 
 
 def round_scores_with_iron(
@@ -66,14 +88,14 @@ def round_scores_with_iron(
 ) -> dict[int, dict[int, tuple[float, bool]]]:
     """Like `round_scores` but also flags whether the round score came from an iron speech
     (the debater spoke more than one substantive position that round)."""
-    position_averages = _round_position_averages(session, tournament_id, elimination=elimination)
-    result: dict[int, dict[int, tuple[float, bool]]] = {}
-    for debater_id, rounds in position_averages.items():
-        result[debater_id] = {
+    averages = _round_position_averages(session, tournament_id, elimination=elimination)
+    return {
+        debater_id: {
             round_id: (max(positions.values()), len(positions) > 1)
             for round_id, positions in rounds.items()
         }
-    return result
+        for debater_id, rounds in averages.items()
+    }
 
 
 def round_scores(
@@ -88,13 +110,23 @@ def round_scores(
     }
 
 
-def participation(session: Session, tournament_id: int | None = None) -> list[Participation]:
+def participation(
+    session: Session,
+    tournament_id: int | None = None,
+    *,
+    debate_ids: Collection[int] | None = None,
+) -> list[Participation]:
     """Per-debate side/outcome records. A debater participated in a debate if they have a
     SpeakerScore row for it (from a non-discarded, non-forfeit ballot); debates with no
-    recorded speaker scores at all fall back to full TeamMember roster membership."""
+    recorded speaker scores at all fall back to full TeamMember roster membership.
+    `debate_ids` restricts the result to those debates (an empty collection yields nothing)."""
+    if debate_ids is not None and not debate_ids:
+        return []
     debate_query = select(Debate, Round).join(Round, Debate.round_id == Round.id)
     if tournament_id is not None:
         debate_query = debate_query.where(Round.tournament_id == tournament_id)
+    if debate_ids is not None:
+        debate_query = debate_query.where(Debate.id.in_(list(debate_ids)))
     debates = session.exec(debate_query).all()
     if not debates:
         return []
@@ -165,6 +197,29 @@ def competition_ranks(values: dict[K, float]) -> dict[K, int]:
             ranks[key] = index
             prev_rank = index
             prev_value = rounded_value
+    return ranks
+
+
+def competition_ranks_by(values: dict[K, tuple[float, ...]]) -> dict[K, int]:
+    """Descending competition ranking on tuple keys (compared element by element, each
+    rounded to 4 places): ties share a rank, gaps follow. Used where a single number isn't the
+    ranking, e.g. team standings by (prelim wins, total speaks)."""
+
+    def rounded(value: tuple[float, ...]) -> tuple[float, ...]:
+        return tuple(round(v, 4) for v in value)
+
+    ordered = sorted(values.items(), key=lambda kv: rounded(kv[1]), reverse=True)
+    ranks: dict[K, int] = {}
+    prev: tuple[float, ...] | None = None
+    prev_rank = 0
+    for index, (key, value) in enumerate(ordered, start=1):
+        current = rounded(value)
+        if current == prev:
+            ranks[key] = prev_rank
+        else:
+            ranks[key] = index
+            prev_rank = index
+            prev = current
     return ranks
 
 

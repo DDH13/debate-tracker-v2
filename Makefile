@@ -1,4 +1,4 @@
-.PHONY: dev test user import-registrations db-create db-seed db-drop db-truncate db-reset
+.PHONY: dev test user import-registrations db-create db-indexes db-seed db-drop db-truncate db-reset
 
 dev:
 	.venv/bin/gunicorn app.main:app -k uvicorn_worker.UvicornWorker -w 2 --reload
@@ -17,6 +17,10 @@ import-registrations:
 
 db-create:
 	PYTHONPATH=. .venv/bin/python scripts/db.py create
+
+# Adds the model indexes missing from an existing database (create-if-not-exists, non-destructive).
+db-indexes:
+	PYTHONPATH=. .venv/bin/python scripts/db.py indexes
 
 db-seed:
 	PYTHONPATH=. .venv/bin/python scripts/db.py seed

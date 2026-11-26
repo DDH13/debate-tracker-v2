@@ -1,4 +1,9 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from fastapi.testclient import TestClient
+from sqlalchemy import event
+from sqlmodel import Session
 
 
 def _build_debate_scaffold(client: TestClient) -> dict:
@@ -278,3 +283,37 @@ def build_tournament(
         "prelim_rounds": prelim_round_records,
         "elim_rounds": elim_round_records,
     }
+
+
+@contextmanager
+def count_queries(session: Session) -> Iterator[list[str]]:
+    """Collects every SQL statement the session's engine runs inside the block, so a test can
+    assert a page endpoint's query count doesn't grow with the size of the data."""
+    statements: list[str] = []
+    engine = session.get_bind()
+
+    def _record(_conn, _cursor, statement, *_args) -> None:
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _record)
+    try:
+        yield statements
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+
+
+def assert_constant_queries(
+    client: TestClient, session: Session, make_url, *, slack: int = 0, tag: str = ""
+) -> None:
+    """Builds a small (4 teams) and a larger (8 teams) tournament and asserts `GET
+    make_url(data)` runs the same number of queries for both (no query per row)."""
+    small = build_tournament(client, teams=4, prelim_rounds=3, elim_rounds=2, slug=f"small-cup{tag}")
+    large = build_tournament(client, teams=8, prelim_rounds=4, elim_rounds=3, slug=f"large-cup{tag}")
+    counts = []
+    for data in (small, large):
+        session.expire_all()
+        with count_queries(session) as statements:
+            resp = client.get(make_url(data))
+        assert resp.status_code == 200, resp.text
+        counts.append(len(statements))
+    assert counts[1] <= counts[0] + slack, f"query count grew with data: {counts}"

@@ -41,8 +41,8 @@ class SpeakerScore(SpeakerScoreBase, table=True):
     )
 
     id: int | None = Field(default=None, primary_key=True)
-    ballot_id: int = Field(foreign_key="ballot.id")
-    debater_id: int = Field(foreign_key="debater.id")
+    ballot_id: int = Field(foreign_key="ballot.id", index=True)
+    debater_id: int = Field(foreign_key="debater.id", index=True)
 
     ballot: "Ballot" = Relationship(back_populates="scores")
     debater: "Debater" = Relationship(back_populates="scores")

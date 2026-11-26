@@ -11,8 +11,8 @@ class TeamMember(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("team_id", "debater_id"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    team_id: int = Field(foreign_key="team.id")
-    debater_id: int = Field(foreign_key="debater.id")
+    team_id: int = Field(foreign_key="team.id", index=True)
+    debater_id: int = Field(foreign_key="debater.id", index=True)
 
     team: "Team" = Relationship(back_populates="member_links")
     debater: "Debater" = Relationship(back_populates="team_links")

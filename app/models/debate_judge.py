@@ -16,8 +16,8 @@ class DebateJudge(DebateJudgeBase, table=True):
     __table_args__ = (UniqueConstraint("debate_id", "judge_id"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    debate_id: int = Field(foreign_key="debate.id")
-    judge_id: int = Field(foreign_key="judge.id")
+    debate_id: int = Field(foreign_key="debate.id", index=True)
+    judge_id: int = Field(foreign_key="judge.id", index=True)
 
     debate: "Debate" = Relationship(back_populates="judge_links")
     judge: "Judge" = Relationship(back_populates="debate_links")
