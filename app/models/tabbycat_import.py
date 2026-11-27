@@ -4,7 +4,7 @@ before a board member settles doubtful matches and imports it. See app/services/
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, DateTime
 from sqlmodel import Field, SQLModel
 
 
@@ -12,13 +12,19 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# timestamptz: a timezone-aware value written to a plain `timestamp` column is converted to the
+# Postgres session's time zone and read back naive, which would skew the stale-job check by
+# the server's UTC offset.
+_TZ = DateTime(timezone=True)
+
+
 class ImportBatch(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     created_by_id: int | None = Field(default=None, foreign_key="user.id", ondelete="SET NULL")
-    created_at: datetime = Field(default_factory=_now)
+    created_at: datetime = Field(default_factory=_now, sa_type=_TZ)
     include_ballots: bool = True
     refresh_stats: bool = True
-    stats_refreshed_at: datetime | None = None
+    stats_refreshed_at: datetime | None = Field(default=None, sa_type=_TZ)
 
 
 class ImportJob(SQLModel, table=True):
@@ -42,7 +48,7 @@ class ImportJob(SQLModel, table=True):
     tournament_id: int | None = Field(
         default=None, foreign_key="tournament.id", index=True, ondelete="SET NULL"
     )
-    checked_at: datetime | None = None
-    finished_at: datetime | None = None
+    checked_at: datetime | None = Field(default=None, sa_type=_TZ)
+    finished_at: datetime | None = Field(default=None, sa_type=_TZ)
     # Touched by the process running the job; a stale active job was lost to a restart.
-    updated_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now, sa_type=_TZ)

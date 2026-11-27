@@ -159,7 +159,9 @@ is covered automatically, and a new public write must be added there deliberatel
     since a second session's commit would commit the dry run too.
   - **Recovery**: a heartbeat thread touches this process's active jobs every 30 s; reads of
     the batch list / a batch fail any active job not owned by this process whose `updated_at`
-    is older than `import_stale_seconds` ("The server restarted while ...").
+    is older than `import_stale_seconds` ("The server restarted while ..."). The import tables'
+    datetimes are `timestamptz`: an aware value in a plain `timestamp` column is stored in the
+    Postgres session's time zone and read back naive, which would skew that comparison.
   - After a batch imports anything and `refresh_stats` is set, `refresh_profiles` runs once.
   - `run` refuses (409) jobs that aren't `ready`, have a blocking issue or an undecided
     `decision`; the check preselects each suggestion. `settings.import_run_inline` (True in
