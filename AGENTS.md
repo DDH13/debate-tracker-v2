@@ -124,6 +124,49 @@ is covered automatically, and a new public write must be added there deliberatel
   app's two-team schema, so anything that doesn't map is skipped, not aborted — see the
   `skipped` list in `ImportReport`. There is no `tabbycat_id` column, so re-importing the
   same slug is not idempotent and raises `409`.
+  - `ImportReport.issues` is the structured version: `ImportIssue {severity, code, message,
+    kind?, upstream_url?, candidates, suggested}`. `blocking` (already imported, BP-only,
+    override target gone) makes a real import roll back and raise `ImportBlocked` (422 on
+    `/tournaments/import`); `decision` is a school with no exact key match but a fuzzy one
+    (`school_similar`, `similar_institutions` >= 0.85, top suggested at >= 0.93) or a new person
+    with a namesake elsewhere (`person_namesake`, suggested "new"); `warning` is everything
+    `_skip` records plus team size / no adjudicator / rounds without results / similar
+    tournament name; `info` summarises matches. New skip sites call `_skip(report, msg, code)`;
+    new checks that shouldn't land in the legacy `skipped` list call `_issue`.
+  - `ImportOverrides` (upstream URL -> local id or `"new"`, per kind) applies the decisions.
+    An id override wins over every match; `"new"` only rules out the fuzzy candidates /
+    namesakes, so exact key / email / name + school matches still apply (`Institution.name`
+    is unique, and a school made by an earlier tournament in the batch must be reused).
+    Candidates never include rows created in the same run (a dry run rolls them back).
+  - `cache_dir` + `offline=True` replays staged responses without the key or the network.
+- **Console imports** (`app/services/imports.py`, `admin/imports.py` at `/admin/imports`,
+  models `ImportBatch` / `ImportJob` in `app/models/tabbycat_import.py`). A batch of CSV rows
+  (tournament URL + optional API key, parsed by `parse_tabbycat_url`) becomes one job per
+  tournament: `queued_check -> checking -> ready -> queued_import -> importing -> imported`
+  (or `failed` / `discarded`; status is plain text, not a native enum).
+  - **API keys are never stored.** The check is a dry run with the key held in memory; every
+    upstream response is staged in `settings.import_staging_dir/<job id>/` (git-ignored; holds
+    speaker emails). The import replays the staged data offline with the saved decisions, so
+    it imports exactly what was reviewed. Staging is removed after import / discard / a
+    blocking check, and at startup when older than `import_staging_ttl_days`. Missing staging
+    at import time fails the job with "check again".
+  - **Runner**: one `ThreadPoolExecutor(max_workers=1)` per process, plus a global lock
+    (`pg_advisory_lock` on Postgres, a `threading.Lock` otherwise) so checks and imports run one
+    at a time across gunicorn workers, in batch order. Status changes go through
+    `_transition` (only from the expected state, so a discarded queued job is left alone).
+    Progress goes to the job row (throttled to 1/s) and an in-process dict; with the
+    in-memory SQLite engine (`StaticPool`, one shared connection) nothing is written mid-run,
+    since a second session's commit would commit the dry run too.
+  - **Recovery**: a heartbeat thread touches this process's active jobs every 30 s; reads of
+    the batch list / a batch fail any active job not owned by this process whose `updated_at`
+    is older than `import_stale_seconds` ("The server restarted while ..."). The import tables'
+    datetimes are `timestamptz`: an aware value in a plain `timestamp` column is stored in the
+    Postgres session's time zone and read back naive, which would skew that comparison.
+  - After a batch imports anything and `refresh_stats` is set, `refresh_profiles` runs once.
+  - `run` refuses (409) jobs that aren't `ready`, have a blocking issue or an undecided
+    `decision`; the check preselects each suggestion. `settings.import_run_inline` (True in
+    `conftest.py`) runs jobs inside the request; `conftest.py` also points the staging dir at
+    `tmp_path`.
 - Static routes such as `/merge`, `/duplicates`, `/similar`, `/merge-info` must be declared
   **before** `/{id}` in their router, or the int path parameter claims them and returns 422.
 - Auth: `app/models/user.py` (`User`, `AuthSession`), `app/core/security.py` (argon2 via

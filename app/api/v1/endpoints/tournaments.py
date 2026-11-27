@@ -8,6 +8,7 @@ from sqlmodel import Session, SQLModel, select
 from app.api.deps import SessionDep, get_or_404
 from app.models import Tournament, TournamentCreate, TournamentPublic, TournamentUpdate
 from app.services.tabbycat import (
+    ImportBlocked,
     ImportReport,
     TabbycatImportError,
     TournamentAlreadyExists,
@@ -57,6 +58,8 @@ def _run_tabbycat_import(
         )
     except TournamentAlreadyExists as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ImportBlocked as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except TabbycatImportError as exc:
         if exc.status_code == 404:
             raise HTTPException(

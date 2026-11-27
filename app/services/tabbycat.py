@@ -9,11 +9,11 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -39,12 +39,20 @@ from app.models import (
     TeamMember,
     Tournament,
 )
-from app.services.institutions import find_matching_institution
-from app.services.text import name_key, normalize_text, split_name, tidy_case
+from app.services.institutions import find_matching_institution, similar_institutions
+from app.services.text import institution_key, jaro_winkler, name_key, normalize_text, split_name, tidy_case
 
 logger = logging.getLogger(__name__)
 
 _GENDER_MAP = {"M": "male", "F": "female", "O": "other"}
+
+# A school with no exact key match is offered for review when a fuzzy match scores at least
+# this; the top candidate is suggested when it scores at least SCHOOL_SUGGEST_SCORE.
+SCHOOL_SIMILAR_SCORE = 0.85
+SCHOOL_SUGGEST_SCORE = 0.93
+# Two different candidates scoring within this of each other are a tie: no suggestion.
+SCHOOL_TIE_MARGIN = 0.01
+TOURNAMENT_SIMILAR_SCORE = 0.95
 
 _CRITERION_ALIASES = {
     "content": {"content", "matter"},
@@ -69,6 +77,63 @@ class TournamentAlreadyExists(Exception):
         self.slug = slug
 
 
+class ImportBlocked(Exception):
+    """A real (non-dry-run) import found a blocking issue and was rolled back."""
+
+    def __init__(self, report: "ImportReport") -> None:
+        blocking = [i.message for i in report.issues if i.severity == "blocking"]
+        super().__init__("; ".join(blocking) or "import blocked")
+        self.report = report
+
+
+Severity = Literal["blocking", "decision", "warning", "info"]
+SubjectKind = Literal["institution", "debater", "judge"]
+
+
+class Candidate(BaseModel):
+    """An existing local row an upstream school or person might be."""
+
+    id: int
+    name: str
+    detail: str | None = None
+    score: float | None = None
+
+
+class ImportIssue(BaseModel):
+    """One finding from an import or a dry run.
+
+    `blocking` stops a real import; `decision` needs a human to pick a candidate (or "new")
+    via `ImportOverrides`, keyed by `kind` + `upstream_url`; `warning` is data that will be
+    skipped or looks wrong; `info` is a summary.
+    """
+
+    severity: Severity
+    code: str
+    message: str
+    kind: SubjectKind | None = None
+    upstream_url: str | None = None
+    upstream_name: str | None = None
+    candidates: list[Candidate] = []
+    suggested: int | Literal["new"] | None = None
+
+
+Choice = int | Literal["new"]
+
+
+class ImportOverrides(BaseModel):
+    """Human decisions for ambiguous matches: upstream URL -> local id, or "new" to create."""
+
+    institutions: dict[str, Choice] = {}
+    debaters: dict[str, Choice] = {}
+    judges: dict[str, Choice] = {}
+
+    def for_kind(self, kind: str) -> dict[str, Choice]:
+        return {"institution": self.institutions, "debater": self.debaters, "judge": self.judges}[kind]
+
+
+ProgressCallback = Callable[[str, int, int], None]
+
+
 class Resolution(BaseModel):
     """How one upstream institution/debater/judge was tied to a local row."""
 
@@ -76,11 +141,14 @@ class Resolution(BaseModel):
     upstream_name: str
     local_id: int
     local_name: str
-    how: str  # "created" | "email" | "name+institution" | "institution-key"
+    how: str  # "created" | "email" | "name+institution" | "institution-key" | "override"
 
 
 class ImportReport(BaseModel):
-    tournament_id: int
+    # None only when the run stopped before creating the tournament (e.g. already imported).
+    tournament_id: int | None = None
+    tournament_name: str | None = None
+    tournament_abbr: str | None = None
     institutions: int = 0
     teams: int = 0
     debaters: int = 0
@@ -92,6 +160,11 @@ class ImportReport(BaseModel):
     speaker_scores: int = 0
     skipped: list[str] = []
     resolutions: list[Resolution] = []
+    issues: list[ImportIssue] = []
+
+    @property
+    def blocking(self) -> list[ImportIssue]:
+        return [i for i in self.issues if i.severity == "blocking"]
 
 
 def describe_integrity_error(exc: IntegrityError) -> str:
@@ -133,9 +206,22 @@ def _record_context(kind: str, payload: object) -> Iterator[None]:
         raise
 
 
-def _skip(report: ImportReport, message: str) -> None:
+def _skip(report: ImportReport, message: str, code: str = "skipped") -> None:
+    """Something upstream that doesn't fit and is left out: kept in `skipped` (the legacy
+    free-text list) and as a structured warning."""
     report.skipped.append(message)
+    report.issues.append(ImportIssue(severity="warning", code=code, message=message))
     logger.warning(message)
+
+
+def _issue(report: ImportReport, severity: Severity, code: str, message: str, **fields) -> ImportIssue:
+    if severity == "decision" and not fields.get("upstream_url"):
+        severity = "warning"  # nothing to key a decision on
+    issue = ImportIssue(severity=severity, code=code, message=message, **fields)
+    report.issues.append(issue)
+    log = logger.warning if severity in ("blocking", "warning") else logger.info
+    log("%s %s: %s", severity, code, message)
+    return issue
 
 
 class _TabbycatClient:
@@ -149,8 +235,11 @@ class _TabbycatClient:
         *,
         http_client: httpx.Client | None = None,
         cache_dir: str | None = None,
+        offline: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
+        # Replay only: every response must already be in `cache_dir`.
+        self._offline = offline
         self.slug = slug
         self._headers = {"Authorization": f"Token {api_key}"} if api_key else {}
         self._client = http_client or httpx.Client(timeout=30.0)
@@ -174,6 +263,10 @@ class _TabbycatClient:
             if cache_path.exists():
                 logger.debug("cache hit for GET %s -> %s", url, cache_path)
                 return json.loads(cache_path.read_text())
+        if self._offline:
+            raise TabbycatImportError(
+                f"staged data for {self.slug} is incomplete ({url} was never fetched); check it again"
+            )
 
         start = time.perf_counter()
         response = self._client.get(url, headers=self._headers)
@@ -266,6 +359,96 @@ def _derive_names(name: str, last_name: str | None) -> tuple[str | None, str | N
     return split_name(name)
 
 
+def _suggest_school(similar: list) -> Choice | None:
+    """The fuzzy candidate to suggest, "new", or None when two different schools tie (say
+    branches of one chain: the upstream name doesn't say which)."""
+    if not similar:
+        return "new"
+    top = similar[0]
+    if top.score < SCHOOL_SUGGEST_SCORE:
+        return "new"
+    rivals = [
+        c
+        for c in similar[1:]
+        if top.score - c.score < SCHOOL_TIE_MARGIN and institution_key(c.name) != institution_key(top.name)
+    ]
+    return None if rivals else top.id
+
+
+def _school_issue(report: ImportReport, inst: dict, similar: list, suggestion: Choice | None) -> None:
+    _issue(
+        report,
+        "decision",
+        "school_similar",
+        f"School {inst['name']!r} has no exact match but looks like "
+        + ", ".join(f"{c.name!r} ({round(c.score * 100)}%)" for c in similar[:3]),
+        kind="institution",
+        upstream_url=inst["url"],
+        upstream_name=inst["name"],
+        candidates=[Candidate(id=c.id, name=c.name, detail=c.code, score=c.score) for c in similar[:5]],
+        suggested=suggestion,
+    )
+
+
+def _suggest_person(namesakes: list, institution_id: int | None, kind: str) -> Choice | None:
+    """The namesake to suggest, "new", or None when it's for a human to pick.
+
+    A debater is only suggested when the namesake has no school or the same one (earlier
+    imports often left teams without a school, so many existing debaters have none). Judges
+    move between schools, so any single namesake is suggested. Several plausible namesakes
+    (already duplicates here) get no suggestion."""
+    plausible = (
+        namesakes
+        if kind == "judge"
+        else [n for n in namesakes if n.institution_id is None or n.institution_id == institution_id]
+    )
+    if not plausible:
+        return "new"
+    return plausible[0].id if len(plausible) == 1 else None
+
+
+def _namesake_issue(
+    session: Session,
+    report: ImportReport,
+    model: type[Debater] | type[Judge],
+    kind: str,
+    name: str,
+    upstream_name: str,
+    source_url: str | None,
+    namesakes: list,
+    suggestion: Choice | None,
+    preview: bool = False,
+) -> None:
+    institution_names = {
+        i.id: i.name
+        for i in session.exec(
+            select(Institution).where(Institution.id.in_({n.institution_id for n in namesakes if n.institution_id}))
+        ).all()
+    }
+    others = ", ".join(f"#{n.id} ({institution_names.get(n.institution_id, 'none')})" for n in namesakes)
+    verb = "matched by name" if isinstance(suggestion, int) and preview else "created"
+    message = f"{model.__name__} {name!r} {verb}; possible duplicate of {others}"
+    report.skipped.append(message)
+    _issue(
+        report,
+        "decision",
+        "person_namesake",
+        message,
+        kind=kind,
+        upstream_url=source_url,
+        upstream_name=upstream_name,
+        candidates=[
+            Candidate(
+                id=n.id,
+                name=_person_label(n),
+                detail=institution_names.get(n.institution_id) if n.institution_id else None,
+            )
+            for n in namesakes
+        ],
+        suggested=suggestion,
+    )
+
+
 def _upsert_person(
     session: Session,
     model: type[Debater] | type[Judge],
@@ -279,13 +462,28 @@ def _upsert_person(
     gender: str | None,
     institution_id: int | None,
     source_url: str | None = None,
+    overrides: dict[str, Choice] | None = None,
+    created_ids: set[int] | None = None,
+    preview: bool = False,
 ) -> _PersonResolution:
+    """Resolve one upstream speaker/adjudicator to a local row.
+
+    Order: a human override for `source_url` (an id), then the per-import cache, then email,
+    then name + institution; otherwise create. An override of "new" just means "none of the
+    namesakes", so it skips the namesake decision. A create where someone of the same
+    name already exists elsewhere is a `person_namesake` decision. `created_ids` holds the
+    rows this run created, which are never offered as candidates (a dry run rolls them back).
+    With `preview` (a dry run) a suggested namesake is used instead of creating someone, so
+    the report shows what the import does with the suggestions accepted.
+    """
     upstream_name = (name or "").strip()
     name = tidy_case(normalize_text(name))
     last_name = normalize_text(last_name) or None
     email = email.strip() if email else None
     key = ("email", email.lower()) if email else ("name", name_key(name), institution_id)
     kind = model.__name__.lower()
+    created_ids = created_ids if created_ids is not None else set()
+    choice = (overrides or {}).get(source_url) if source_url else None
 
     def resolved(person, created: bool, how: str) -> _PersonResolution:
         report.resolutions.append(
@@ -294,11 +492,29 @@ def _upsert_person(
                 upstream_name=upstream_name,
                 local_id=person.id,
                 local_name=_person_label(person),
-                how=_resolution_how(how),
+                how=how if how in ("override", "suggested") else _resolution_how(how),
             )
         )
         return _PersonResolution(person, created, how, key)
 
+    if isinstance(choice, int):
+        chosen = session.get(model, choice)
+        if chosen is not None:
+            cache[key] = chosen
+            logger.debug("%s %r resolved via override to id=%s (upstream %s)", model.__name__, name, choice, source_url)
+            return resolved(chosen, False, "override")
+        _issue(
+            report,
+            "blocking",
+            "override_missing",
+            f"{model.__name__} {upstream_name!r} was matched to #{choice}, which no longer exists; check again",
+            kind=kind,
+            upstream_url=source_url,
+            upstream_name=upstream_name,
+        )
+
+    # "new" only rules out the namesake candidates; the exact email / name + school match
+    # below still applies.
     cached = cache.get(key)
     if cached is not None:
         how = "cache-email" if key[0] == "email" else "cache-name"
@@ -329,9 +545,24 @@ def _upsert_person(
         )
         return resolved(existing, False, how)
 
-    namesakes = session.exec(
-        select(model).where(func.lower(model.full_name) == name_key(name)).order_by(model.id)
-    ).all()
+    namesakes = (
+        []
+        if choice == "new"
+        else [
+            n
+            for n in session.exec(
+                select(model).where(func.lower(model.full_name) == name_key(name)).order_by(model.id)
+            ).all()
+            if n.id not in created_ids
+        ]
+    )
+
+    suggestion = _suggest_person(namesakes, institution_id, kind)
+    if preview and isinstance(suggestion, int):
+        person = next(n for n in namesakes if n.id == suggestion)
+        cache[key] = person
+        _namesake_issue(session, report, model, kind, name, upstream_name, source_url, namesakes, suggestion, preview)
+        return resolved(person, False, "suggested")
 
     first_name, resolved_last_name = _derive_names(name, last_name)
     person = model(
@@ -345,25 +576,12 @@ def _upsert_person(
     )
     session.add(person)
     session.flush()
+    created_ids.add(person.id)
     cache[key] = person
     logger.debug("%s %r created id=%s key=%r (upstream %s)", model.__name__, name, person.id, key, source_url)
 
     if namesakes:
-        institution_names = {
-            i.id: i.name
-            for i in session.exec(
-                select(Institution).where(
-                    Institution.id.in_({n.institution_id for n in namesakes if n.institution_id})
-                )
-            ).all()
-        }
-        others = ", ".join(
-            f"#{n.id} ({institution_names.get(n.institution_id, 'none')})" for n in namesakes
-        )
-        _skip(
-            report,
-            f"{model.__name__} {name!r} created; possible duplicate of {others}",
-        )
+        _namesake_issue(session, report, model, kind, name, upstream_name, source_url, namesakes, suggestion)
     return resolved(person, True, "created")
 
 
@@ -429,6 +647,7 @@ def _import_ballots(
                         _skip(
                             report,
                             f"Debate {debate.id}: ballot adjudicator not in imported panel, skipped",
+                            "ballot_judge_unknown",
                         )
                         continue
                 else:
@@ -437,12 +656,14 @@ def _import_ballots(
                         _skip(
                             report,
                             f"Debate {debate.id}: consensus ballot has no chair to attribute, skipped",
+                            "ballot_no_chair",
                         )
                         continue
                 if judge_id not in judge_ids_on_panel:
                     _skip(
                         report,
                         f"Debate {debate.id}: ballot judge {judge_id} not on imported panel, skipped",
+                        "ballot_judge_unknown",
                     )
                     continue
 
@@ -451,6 +672,7 @@ def _import_ballots(
                     _skip(
                         report,
                         f"Debate {debate.id}: duplicate ballot for judge {judge_id}, kept highest version",
+                        "duplicate_ballot",
                     )
                     if version <= existing[0]:
                         continue
@@ -473,6 +695,7 @@ def _import_ballots(
                 _skip(
                     report,
                     f"Debate {debate.id}: ballot for judge {judge_id} has no confirmed winner, skipped",
+                    "ballot_no_winner",
                 )
                 continue
 
@@ -502,6 +725,7 @@ def _import_ballots(
                     _skip(
                         report,
                         f"Debate {debate.id} judge {judge_id}: {len(speeches)} speeches, kept first 4",
+                        "extra_speeches",
                     )
                 for index, speech in enumerate(speeches[:4]):
                     debater_id = debater_by_url.get(speech.get("speaker"))
@@ -509,6 +733,7 @@ def _import_ballots(
                         _skip(
                             report,
                             f"Debate {debate.id} judge {judge_id}: speech speaker not found, skipped",
+                            "unknown_speaker",
                         )
                         continue
 
@@ -528,6 +753,7 @@ def _import_ballots(
                         _skip(
                             report,
                             f"Debate {debate.id} judge {judge_id}: invalid speaker score, skipped ({exc})",
+                            "invalid_score",
                         )
                         continue
 
@@ -567,6 +793,9 @@ def _run_import(
     include_ballots: bool,
     *,
     report_sink: list[ImportReport] | None = None,
+    overrides: ImportOverrides | None = None,
+    progress: ProgressCallback | None = None,
+    preview: bool = False,
 ) -> ImportReport:
     logger.info(
         "import start slug=%s base_url=%s include_ballots=%s cache_dir=%s",
@@ -579,7 +808,19 @@ def _run_import(
     if existing is not None:
         raise TournamentAlreadyExists(slug)
 
+    overrides = overrides or ImportOverrides()
+
+    def step(phase: str, done: int, total: int) -> None:
+        if progress is not None:
+            progress(phase, done, total)
+
+    step("Fetching tournament", 0, 0)
     tourney_data = client.get(client.url(f"/api/v1/tournaments/{slug}"))
+    similar_tournaments = [
+        t
+        for t in session.exec(select(Tournament)).all()
+        if jaro_winkler(name_key(t.name), name_key(tourney_data.get("name") or "")) >= TOURNAMENT_SIMILAR_SCORE
+    ]
     with _record_context(f"tournament {slug}", tourney_data):
         tournament = Tournament(
             name=tourney_data["name"],
@@ -589,17 +830,55 @@ def _run_import(
         )
         session.add(tournament)
         session.flush()
-    report = ImportReport(tournament_id=tournament.id)
+    report = ImportReport(
+        tournament_id=tournament.id, tournament_name=tournament.name, tournament_abbr=tournament.abbr
+    )
     if report_sink is not None:
         report_sink.append(report)
+    for other in similar_tournaments:
+        _issue(
+            report,
+            "warning",
+            "tournament_name_similar",
+            f"An existing tournament has a very similar name: {other.name!r} (#{other.id}, slug {other.slug!r}). "
+            f"Make sure this isn't the same tournament under another slug.",
+        )
+    created_ids: dict[str, set[int]] = {"institution": set(), "debater": set(), "judge": set()}
     logger.info("tournament local_id=%s name=%r abbr=%r", tournament.id, tournament.name, tournament.abbr)
 
     institution_by_url: dict[str, int] = {}
     institutions_fetched = 0
     institutions_matched = 0
+    step("Fetching schools", 0, 0)
     for inst in client.get_list(client.url("/api/v1/institutions")):
         institutions_fetched += 1
         with _record_context(f"institution {inst.get('name')!r}", inst):
+            choice = overrides.institutions.get(inst["url"])
+            if isinstance(choice, int):
+                chosen = session.get(Institution, choice)
+                if chosen is not None:
+                    institution_by_url[inst["url"]] = chosen.id
+                    report.resolutions.append(
+                        Resolution(
+                            kind="institution",
+                            upstream_name=inst["name"],
+                            local_id=chosen.id,
+                            local_name=chosen.name,
+                            how="override",
+                        )
+                    )
+                    continue
+                _issue(
+                    report,
+                    "blocking",
+                    "override_missing",
+                    f"School {inst['name']!r} was matched to #{choice}, which no longer exists; check again",
+                    kind="institution",
+                    upstream_url=inst["url"],
+                    upstream_name=inst["name"],
+                )
+            # "new" only rules out the fuzzy candidates; an exact key match (say a school an
+            # earlier tournament in the same batch created) still applies.
             existing_inst = find_matching_institution(session, inst["name"])
             if existing_inst is not None:
                 institution_by_url[inst["url"]] = existing_inst.id
@@ -615,9 +894,36 @@ def _run_import(
                 )
                 logger.debug("institution %r matched existing id=%s", inst["name"], existing_inst.id)
                 continue
+            similar = (
+                []
+                if choice is not None
+                else [
+                    c
+                    for c in similar_institutions(session, inst["name"], threshold=SCHOOL_SIMILAR_SCORE)
+                    if c.id not in created_ids["institution"]
+                ]
+            )
+            suggestion = _suggest_school(similar)
+            if similar and preview and isinstance(suggestion, int):
+                chosen = session.get(Institution, suggestion)
+                institution_by_url[inst["url"]] = chosen.id
+                _school_issue(report, inst, similar, suggestion)
+                report.resolutions.append(
+                    Resolution(
+                        kind="institution",
+                        upstream_name=inst["name"],
+                        local_id=chosen.id,
+                        local_name=chosen.name,
+                        how="suggested",
+                    )
+                )
+                continue
             new_inst = Institution(name=normalize_text(inst["name"]), code=inst.get("code") or None)
             session.add(new_inst)
             session.flush()
+            created_ids["institution"].add(new_inst.id)
+            if similar:
+                _school_issue(report, inst, similar, suggestion)
             institution_by_url[inst["url"]] = new_inst.id
             report.institutions += 1
             report.resolutions.append(
@@ -645,8 +951,11 @@ def _run_import(
     teams_institution_unresolved = 0
     debaters_reused = 0
     degenerate_person_merges_teams = 0
-    for team_data in client.get_list(client.url(f"/api/v1/tournaments/{slug}/teams")):
+    step("Fetching teams", 0, 0)
+    teams_payload = client.get_list(client.url(f"/api/v1/tournaments/{slug}/teams"))
+    for team_data in teams_payload:
         teams_fetched += 1
+        step("Importing teams", teams_fetched, len(teams_payload))
         name = team_data.get("long_name") or team_data.get("short_name") or team_data.get("reference")
         with _record_context(f"team {name!r} (upstream {team_data.get('url')})", team_data):
             institution_url = team_data.get("institution")
@@ -660,6 +969,7 @@ def _run_import(
                     _skip(
                         report,
                         f"Team {name!r}: institution {institution_url} did not resolve, institution_id left NULL",
+                        "unresolved_institution",
                     )
 
             team = Team(tournament_id=tournament.id, name=name, institution_id=institution_id)
@@ -670,7 +980,16 @@ def _run_import(
             logger.debug("team %r created id=%s institution_id=%s", name, team.id, institution_id)
 
             seen_debaters: dict[int, str] = {}
-            for speaker in team_data.get("speakers", []):
+            speakers = team_data.get("speakers", [])
+            # Teams often register reserves, so only a team that can't field three is unusual.
+            if len(speakers) < 3:
+                _issue(
+                    report,
+                    "warning",
+                    "team_size",
+                    f"Team {name!r} has only {len(speakers)} speaker(s)",
+                )
+            for speaker in speakers:
                 res = _upsert_person(
                     session,
                     Debater,
@@ -683,6 +1002,9 @@ def _run_import(
                     gender=speaker.get("gender"),
                     institution_id=institution_id,
                     source_url=speaker.get("url"),
+                    overrides=overrides.debaters,
+                    created_ids=created_ids["debater"],
+                    preview=preview,
                 )
                 debater = res.person
                 if res.created:
@@ -716,6 +1038,7 @@ def _run_import(
                         report,
                         f"Team {name!r}: speaker {speaker.get('name')!r} resolved to a debater already "
                         f"on this team, duplicate TeamMember skipped",
+                        "duplicate_member",
                     )
                     continue
                 seen_debaters[debater.id] = speaker["url"]
@@ -727,12 +1050,14 @@ def _run_import(
             report,
             f"{teams_no_institution_url} of {teams_fetched} teams had no institution in the upstream "
             f"payload (institution_id left NULL)",
+            "team_no_institution",
         )
     if degenerate_person_merges_teams:
         _skip(
             report,
             f"{degenerate_person_merges_teams} debater(s) matched a pre-existing row by name alone "
             f"(no email or institution) — possible cross-tournament identity merge",
+            "name_only_match",
         )
     logger.info(
         "teams: %d created, %d debaters created, %d reused, %d teams with unresolved institution",
@@ -748,8 +1073,11 @@ def _run_import(
     adjs_no_institution = 0
     judges_reused = 0
     degenerate_person_merges_adjs = 0
-    for adj in client.get_list(client.url(f"/api/v1/tournaments/{slug}/adjudicators")):
+    step("Fetching adjudicators", 0, 0)
+    adjs_payload = client.get_list(client.url(f"/api/v1/tournaments/{slug}/adjudicators"))
+    for adj in adjs_payload:
         adjs_fetched += 1
+        step("Importing adjudicators", adjs_fetched, len(adjs_payload))
         with _record_context(f"adjudicator {adj.get('name')!r}", adj):
             institution_url = adj.get("institution")
             if institution_url is None:
@@ -762,6 +1090,7 @@ def _run_import(
                         report,
                         f"Adjudicator {adj.get('name')!r}: institution {institution_url} did not resolve, "
                         f"institution_id left NULL",
+                        "unresolved_institution",
                     )
             res = _upsert_person(
                 session,
@@ -775,6 +1104,9 @@ def _run_import(
                 gender=adj.get("gender"),
                 institution_id=institution_id,
                 source_url=adj.get("url"),
+                overrides=overrides.judges,
+                created_ids=created_ids["judge"],
+                preview=preview,
             )
             judge = res.person
             if res.created:
@@ -800,12 +1132,14 @@ def _run_import(
             report,
             f"{adjs_no_institution} of {adjs_fetched} adjudicators had no institution in the upstream "
             f"payload (institution_id left NULL)",
+            "judge_no_institution",
         )
     if degenerate_person_merges_adjs:
         _skip(
             report,
             f"{degenerate_person_merges_adjs} judge(s) matched a pre-existing row by name alone "
             f"(no email or institution) — possible cross-tournament identity merge",
+            "name_only_match",
         )
     logger.info(
         "adjudicators: %d created, %d reused, %d with no institution",
@@ -814,6 +1148,7 @@ def _run_import(
         adjs_no_institution,
     )
 
+    step("Fetching rounds and motions", 0, 0)
     venue_name_by_url: dict[str, str] = {
         venue["url"]: venue.get("name") or venue.get("display_name")
         for venue in client.get_list(client.url(f"/api/v1/tournaments/{slug}/venues"))
@@ -884,6 +1219,7 @@ def _run_import(
                         report,
                         f"Round {round_data['seq']}: kept first of {len(motions)} motions, "
                         f"{len(motions) - 1} extra motion(s) skipped",
+                        "extra_motion",
                     )
             else:
                 rounds_no_motion += 1
@@ -893,6 +1229,7 @@ def _run_import(
             report,
             f"{rounds_no_motion} of {rounds_fetched} rounds had no motion in the upstream payload "
             f"(0 motions imported for them)",
+            "missing_motion",
         )
         if rounds_no_motion == rounds_fetched:
             logger.warning("no motions at all in %d round(s) — total motion data loss", rounds_no_motion)
@@ -903,18 +1240,28 @@ def _run_import(
         rounds_no_motion,
     )
 
-    for seq, round_id in round_ids_by_seq.items():
+    pairings_seen = 0
+    debates_without_panel = 0
+    rounds_without_results: list[int] = []
+    total_rounds = len(round_ids_by_seq)
+    for round_index, (seq, round_id) in enumerate(round_ids_by_seq.items(), start=1):
+        step(f"Round {seq}: fetching pairings", round_index - 1, total_rounds)
         pairings = client.get_list(client.url(f"/api/v1/tournaments/{slug}/rounds/{seq}/pairings"))
+        pairings_seen += len(pairings)
+        round_debates: list[Debate] = []
         logger.info("round %d: %d pairings fetched", seq, len(pairings))
         round_debates_created = 0
         round_pairings_skipped = 0
-        for pairing in pairings:
+        for pairing_index, pairing in enumerate(pairings, start=1):
+            if include_ballots:
+                step(f"Round {seq}: fetching ballots", pairing_index - 1, len(pairings))
             with _record_context(f"round {seq} pairing {pairing.get('id')}", pairing):
                 teams = pairing.get("teams") or []
                 if len(teams) != 2:
                     _skip(
                         report,
                         f"Round {seq} pairing {pairing.get('id')}: expected 2 teams, got {len(teams)}, skipped",
+                        "bp_debate" if len(teams) == 4 else "bye",
                     )
                     round_pairings_skipped += 1
                     continue
@@ -930,6 +1277,7 @@ def _run_import(
                     _skip(
                         report,
                         f"Round {seq} pairing {pairing.get('id')}: unmappable sides (BP or bye), skipped",
+                        "unmappable_sides",
                     )
                     round_pairings_skipped += 1
                     continue
@@ -940,6 +1288,7 @@ def _run_import(
                     _skip(
                         report,
                         f"Round {seq} pairing {pairing.get('id')}: team not found in imported set, skipped",
+                        "unknown_team",
                     )
                     round_pairings_skipped += 1
                     continue
@@ -954,6 +1303,7 @@ def _run_import(
                 session.flush()
                 report.debates += 1
                 round_debates_created += 1
+                round_debates.append(debate)
                 logger.debug(
                     "round %d debate id=%s: prop=%s opp=%s room=%r", seq, debate.id, prop_team_id, opp_team_id, room
                 )
@@ -995,6 +1345,8 @@ def _run_import(
                             session.add(DebateJudge(debate_id=debate.id, judge_id=judge_id, is_trainee=True))
                             judge_ids_on_panel.add(judge_id)
                     session.flush()
+                if not judge_ids_on_panel:
+                    debates_without_panel += 1
 
                 if include_ballots:
                     _import_ballots(
@@ -1011,8 +1363,33 @@ def _run_import(
                         judge_ids_on_panel=judge_ids_on_panel,
                         report=report,
                     )
+        if include_ballots and round_debates and all(d.winner is None for d in round_debates):
+            rounds_without_results.append(seq)
         logger.info(
             "round %d: %d debate(s) created, %d pairing(s) skipped", seq, round_debates_created, round_pairings_skipped
+        )
+
+    if debates_without_panel:
+        _issue(
+            report,
+            "warning",
+            "no_adjudicator",
+            f"{debates_without_panel} debate(s) have no adjudicator on the imported panel",
+        )
+    if rounds_without_results:
+        _issue(
+            report,
+            "warning",
+            "round_without_results",
+            "No confirmed results in round(s) " + ", ".join(str(r) for r in rounds_without_results)
+            + "; their debates will be imported without winners",
+        )
+    if pairings_seen and report.debates == 0:
+        _issue(
+            report,
+            "blocking",
+            "no_two_team_debates",
+            f"None of the {pairings_seen} pairings is a two-team debate (BP or byes only), so nothing would be imported",
         )
 
     if starts_ats:
@@ -1020,9 +1397,21 @@ def _run_import(
         session.add(tournament)
         logger.info("tournament.date set to %s from %d round start time(s)", tournament.date, len(starts_ats))
     else:
-        _skip(report, "no round had starts_at; tournament.date left NULL")
+        _skip(report, "no round had starts_at; tournament.date left NULL", "missing_start")
 
-    logger.info("import complete slug=%s %s", slug, report.model_dump(exclude={"skipped"}))
+    matched = {kind: 0 for kind in ("institution", "debater", "judge")}
+    for resolution in report.resolutions:
+        if resolution.how != "created":
+            matched[resolution.kind] += 1
+    _issue(
+        report,
+        "info",
+        "matched_existing",
+        f"{matched['institution']} school(s), {matched['debater']} debater record(s) and "
+        f"{matched['judge']} judge record(s) matched existing records",
+    )
+
+    logger.info("import complete slug=%s %s", slug, report.model_dump(exclude={"skipped", "issues", "resolutions"}))
     return report
 
 
@@ -1034,6 +1423,10 @@ def import_tournament(
     session: Session | None = None,
     include_ballots: bool = True,
     dry_run: bool = False,
+    overrides: ImportOverrides | None = None,
+    progress: ProgressCallback | None = None,
+    cache_dir: str | None = None,
+    offline: bool = False,
 ) -> ImportReport:
     """Fetch a tournament from a Tabbycat instance and populate the local DB.
 
@@ -1046,17 +1439,41 @@ def import_tournament(
     With `dry_run=True` the whole import runs, then rolls back instead of committing, so the
     returned report (counts, skips, resolutions) shows what a real import would do. The
     report's `tournament_id` refers to a row that no longer exists.
+
+    `overrides` applies human decisions for ambiguous schools/people (see `ImportIssue`).
+    A real import with any `blocking` issue is rolled back and raises `ImportBlocked`.
+    `cache_dir` overrides `settings.tabbycat_cache_dir`; with `offline=True` every upstream
+    response must already be cached there (replaying a checked import without the API key).
     """
     api_key = api_key or settings.tabbycat_api_key
     owns_session = session is None
     active_session = session or Session(engine)
-    client = _TabbycatClient(base_url, slug, api_key, cache_dir=settings.tabbycat_cache_dir)
+    client = _TabbycatClient(
+        base_url,
+        slug,
+        api_key,
+        cache_dir=cache_dir or settings.tabbycat_cache_dir,
+        offline=offline,
+    )
     sink: list[ImportReport] = []
     try:
-        report = _run_import(active_session, client, base_url, slug, include_ballots, report_sink=sink)
+        report = _run_import(
+            active_session,
+            client,
+            base_url,
+            slug,
+            include_ballots,
+            report_sink=sink,
+            overrides=overrides,
+            progress=progress,
+            preview=dry_run,
+        )
         if dry_run:
             active_session.rollback()
             logger.info("import preview slug=%s rolled back (dry run)", slug)
+        elif report.blocking:
+            active_session.rollback()
+            raise ImportBlocked(report)
         else:
             active_session.commit()
         return report

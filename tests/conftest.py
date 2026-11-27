@@ -16,7 +16,14 @@ from app.services.auth import create_auth_session
 settings.init_db_on_startup = False  # never create tables or seed rows in the .env database
 settings.seed_on_startup = False
 settings.tabbycat_cache_dir = None  # tests must always hit the respx-mocked client fresh
+settings.import_run_inline = True  # import jobs run inside the request, on the test engine
 settings.public_cache_ttl_seconds = 0  # every test builds its own data; nothing may be cached across them
+
+
+@pytest.fixture(autouse=True)
+def _import_staging(tmp_path, monkeypatch) -> None:
+    """Console imports stage upstream data on disk; keep it out of the repo."""
+    monkeypatch.setattr(settings, "import_staging_dir", str(tmp_path / "import-staging"))
 
 
 @pytest.fixture(name="session")
