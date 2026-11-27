@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     log_level: str = "DEBUG"
     import_trace: bool = False
     tabbycat_cache_dir: str | None = None
+    # Console imports (app/services/imports.py): each checked tournament's upstream responses
+    # are staged here so the import can replay them without the API key. Holds personal data
+    # (speaker emails), so it is git-ignored and removed after import, discard or this many days.
+    import_staging_dir: str = ".import-staging"
+    import_staging_ttl_days: int = 7
+    # An active job whose heartbeat is older than this was lost (server restart or crash).
+    import_stale_seconds: int = 180
+    # Run import jobs synchronously in the request instead of on the background thread (tests).
+    import_run_inline: bool = False
     cors_origins: list[str] = ["*"]
     # In-process TTL cache behind the /public pages (tournament snapshots, field means).
     # 0 disables it. Each gunicorn worker has its own copy, so a write elsewhere is picked up

@@ -1,4 +1,14 @@
+"""Import the tournaments in tournaments.csv (base_url,slug) through the API, one by one.
+
+Prefer the console's Import tournaments page (/admin/imports): it checks each tournament,
+shows what would be skipped or duplicated, and runs the import in the background.
+
+The import endpoint needs a board user: sign in to the console, copy the `dt_session` cookie
+and run with DT_SESSION=<cookie value> in the environment.
+"""
+
 import csv
+import os
 import sys
 import httpx
 
@@ -32,6 +42,7 @@ def import_tournaments():
                         API_ENDPOINT,
                         json=payload,
                         headers={"Content-Type": "application/json"},
+                        cookies={"dt_session": os.environ.get("DT_SESSION", "")},
                         timeout=REQUEST_TIMEOUT,
                     )
 

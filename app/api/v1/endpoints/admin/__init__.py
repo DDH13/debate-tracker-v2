@@ -5,6 +5,7 @@ from app.api.v1.endpoints.admin import (
     debaters,
     feedback,
     finance,
+    imports,
     judges,
     outreach,
     people,
@@ -34,3 +35,4 @@ router.include_router(workshops.router)
 router.include_router(tournament_ops.router)
 router.include_router(judges.router)
 router.include_router(debaters.router)
+router.include_router(imports.router)

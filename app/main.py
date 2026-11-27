@@ -11,6 +11,7 @@ from app.core.logging import configure_logging
 from app.db.seed import seed
 from app.db.session import engine, init_db
 from app.services.finance import ensure_default_categories
+from app.services.imports import sweep_staging
 from app.services.public import cache as public_cache
 
 configure_logging()
@@ -22,6 +23,7 @@ async def lifespan(app: FastAPI):
         init_db()
         with Session(engine) as session:
             ensure_default_categories(session)
+        sweep_staging()
     if settings.seed_on_startup:
         with Session(engine) as session:
             seed(session)

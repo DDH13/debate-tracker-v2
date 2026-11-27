@@ -117,6 +117,7 @@ from app.models.subscription import (
     SubscriptionUpdate,
 )
 from app.models.task import Task, TaskCreate, TaskPublic, TaskUpdate
+from app.models.tabbycat_import import ImportBatch, ImportJob
 from app.models.team import Team, TeamCreate, TeamPublic, TeamUpdate
 from app.models.team_member import TeamMember, TeamMemberCreate, TeamMemberPublic
 from app.models.tournament_ops import (
@@ -334,6 +335,8 @@ __all__ = [
     "BoardRoleCreate",
     "BoardRolePublic",
     "BoardRoleUpdate",
+    "ImportBatch",
+    "ImportJob",
     "Task",
     "TaskCreate",
     "TaskPublic",
