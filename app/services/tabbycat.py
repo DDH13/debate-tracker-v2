@@ -40,7 +40,7 @@ from app.models import (
     Tournament,
 )
 from app.services.institutions import find_matching_institution, similar_institutions
-from app.services.text import jaro_winkler, name_key, normalize_text, split_name, tidy_case
+from app.services.text import institution_key, jaro_winkler, name_key, normalize_text, split_name, tidy_case
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,8 @@ _GENDER_MAP = {"M": "male", "F": "female", "O": "other"}
 # this; the top candidate is suggested when it scores at least SCHOOL_SUGGEST_SCORE.
 SCHOOL_SIMILAR_SCORE = 0.85
 SCHOOL_SUGGEST_SCORE = 0.93
+# Two different candidates scoring within this of each other are a tie: no suggestion.
+SCHOOL_TIE_MARGIN = 0.01
 TOURNAMENT_SIMILAR_SCORE = 0.95
 
 _CRITERION_ALIASES = {
@@ -357,6 +359,96 @@ def _derive_names(name: str, last_name: str | None) -> tuple[str | None, str | N
     return split_name(name)
 
 
+def _suggest_school(similar: list) -> Choice | None:
+    """The fuzzy candidate to suggest, "new", or None when two different schools tie (say
+    branches of one chain: the upstream name doesn't say which)."""
+    if not similar:
+        return "new"
+    top = similar[0]
+    if top.score < SCHOOL_SUGGEST_SCORE:
+        return "new"
+    rivals = [
+        c
+        for c in similar[1:]
+        if top.score - c.score < SCHOOL_TIE_MARGIN and institution_key(c.name) != institution_key(top.name)
+    ]
+    return None if rivals else top.id
+
+
+def _school_issue(report: ImportReport, inst: dict, similar: list, suggestion: Choice | None) -> None:
+    _issue(
+        report,
+        "decision",
+        "school_similar",
+        f"School {inst['name']!r} has no exact match but looks like "
+        + ", ".join(f"{c.name!r} ({round(c.score * 100)}%)" for c in similar[:3]),
+        kind="institution",
+        upstream_url=inst["url"],
+        upstream_name=inst["name"],
+        candidates=[Candidate(id=c.id, name=c.name, detail=c.code, score=c.score) for c in similar[:5]],
+        suggested=suggestion,
+    )
+
+
+def _suggest_person(namesakes: list, institution_id: int | None, kind: str) -> Choice | None:
+    """The namesake to suggest, "new", or None when it's for a human to pick.
+
+    A debater is only suggested when the namesake has no school or the same one (earlier
+    imports often left teams without a school, so many existing debaters have none). Judges
+    move between schools, so any single namesake is suggested. Several plausible namesakes
+    (already duplicates here) get no suggestion."""
+    plausible = (
+        namesakes
+        if kind == "judge"
+        else [n for n in namesakes if n.institution_id is None or n.institution_id == institution_id]
+    )
+    if not plausible:
+        return "new"
+    return plausible[0].id if len(plausible) == 1 else None
+
+
+def _namesake_issue(
+    session: Session,
+    report: ImportReport,
+    model: type[Debater] | type[Judge],
+    kind: str,
+    name: str,
+    upstream_name: str,
+    source_url: str | None,
+    namesakes: list,
+    suggestion: Choice | None,
+    preview: bool = False,
+) -> None:
+    institution_names = {
+        i.id: i.name
+        for i in session.exec(
+            select(Institution).where(Institution.id.in_({n.institution_id for n in namesakes if n.institution_id}))
+        ).all()
+    }
+    others = ", ".join(f"#{n.id} ({institution_names.get(n.institution_id, 'none')})" for n in namesakes)
+    verb = "matched by name" if isinstance(suggestion, int) and preview else "created"
+    message = f"{model.__name__} {name!r} {verb}; possible duplicate of {others}"
+    report.skipped.append(message)
+    _issue(
+        report,
+        "decision",
+        "person_namesake",
+        message,
+        kind=kind,
+        upstream_url=source_url,
+        upstream_name=upstream_name,
+        candidates=[
+            Candidate(
+                id=n.id,
+                name=_person_label(n),
+                detail=institution_names.get(n.institution_id) if n.institution_id else None,
+            )
+            for n in namesakes
+        ],
+        suggested=suggestion,
+    )
+
+
 def _upsert_person(
     session: Session,
     model: type[Debater] | type[Judge],
@@ -372,6 +464,7 @@ def _upsert_person(
     source_url: str | None = None,
     overrides: dict[str, Choice] | None = None,
     created_ids: set[int] | None = None,
+    preview: bool = False,
 ) -> _PersonResolution:
     """Resolve one upstream speaker/adjudicator to a local row.
 
@@ -380,6 +473,8 @@ def _upsert_person(
     namesakes", so it skips the namesake decision. A create where someone of the same
     name already exists elsewhere is a `person_namesake` decision. `created_ids` holds the
     rows this run created, which are never offered as candidates (a dry run rolls them back).
+    With `preview` (a dry run) a suggested namesake is used instead of creating someone, so
+    the report shows what the import does with the suggestions accepted.
     """
     upstream_name = (name or "").strip()
     name = tidy_case(normalize_text(name))
@@ -397,7 +492,7 @@ def _upsert_person(
                 upstream_name=upstream_name,
                 local_id=person.id,
                 local_name=_person_label(person),
-                how="override" if how == "override" else _resolution_how(how),
+                how=how if how in ("override", "suggested") else _resolution_how(how),
             )
         )
         return _PersonResolution(person, created, how, key)
@@ -462,6 +557,13 @@ def _upsert_person(
         ]
     )
 
+    suggestion = _suggest_person(namesakes, institution_id, kind)
+    if preview and isinstance(suggestion, int):
+        person = next(n for n in namesakes if n.id == suggestion)
+        cache[key] = person
+        _namesake_issue(session, report, model, kind, name, upstream_name, source_url, namesakes, suggestion, preview)
+        return resolved(person, False, "suggested")
+
     first_name, resolved_last_name = _derive_names(name, last_name)
     person = model(
         full_name=name,
@@ -479,37 +581,7 @@ def _upsert_person(
     logger.debug("%s %r created id=%s key=%r (upstream %s)", model.__name__, name, person.id, key, source_url)
 
     if namesakes:
-        institution_names = {
-            i.id: i.name
-            for i in session.exec(
-                select(Institution).where(
-                    Institution.id.in_({n.institution_id for n in namesakes if n.institution_id})
-                )
-            ).all()
-        }
-        others = ", ".join(
-            f"#{n.id} ({institution_names.get(n.institution_id, 'none')})" for n in namesakes
-        )
-        message = f"{model.__name__} {name!r} created; possible duplicate of {others}"
-        report.skipped.append(message)
-        _issue(
-            report,
-            "decision",
-            "person_namesake",
-            message,
-            kind=kind,
-            upstream_url=source_url,
-            upstream_name=upstream_name,
-            candidates=[
-                Candidate(
-                    id=n.id,
-                    name=_person_label(n),
-                    detail=institution_names.get(n.institution_id) if n.institution_id else None,
-                )
-                for n in namesakes
-            ],
-            suggested="new",
-        )
+        _namesake_issue(session, report, model, kind, name, upstream_name, source_url, namesakes, suggestion)
     return resolved(person, True, "created")
 
 
@@ -723,6 +795,7 @@ def _run_import(
     report_sink: list[ImportReport] | None = None,
     overrides: ImportOverrides | None = None,
     progress: ProgressCallback | None = None,
+    preview: bool = False,
 ) -> ImportReport:
     logger.info(
         "import start slug=%s base_url=%s include_ballots=%s cache_dir=%s",
@@ -830,26 +903,27 @@ def _run_import(
                     if c.id not in created_ids["institution"]
                 ]
             )
+            suggestion = _suggest_school(similar)
+            if similar and preview and isinstance(suggestion, int):
+                chosen = session.get(Institution, suggestion)
+                institution_by_url[inst["url"]] = chosen.id
+                _school_issue(report, inst, similar, suggestion)
+                report.resolutions.append(
+                    Resolution(
+                        kind="institution",
+                        upstream_name=inst["name"],
+                        local_id=chosen.id,
+                        local_name=chosen.name,
+                        how="suggested",
+                    )
+                )
+                continue
             new_inst = Institution(name=normalize_text(inst["name"]), code=inst.get("code") or None)
             session.add(new_inst)
             session.flush()
             created_ids["institution"].add(new_inst.id)
             if similar:
-                top = similar[0]
-                _issue(
-                    report,
-                    "decision",
-                    "school_similar",
-                    f"School {inst['name']!r} has no exact match but looks like "
-                    + ", ".join(f"{c.name!r} ({round(c.score * 100)}%)" for c in similar[:3]),
-                    kind="institution",
-                    upstream_url=inst["url"],
-                    upstream_name=inst["name"],
-                    candidates=[
-                        Candidate(id=c.id, name=c.name, detail=c.code, score=c.score) for c in similar[:5]
-                    ],
-                    suggested=top.id if top.score >= SCHOOL_SUGGEST_SCORE else "new",
-                )
+                _school_issue(report, inst, similar, suggestion)
             institution_by_url[inst["url"]] = new_inst.id
             report.institutions += 1
             report.resolutions.append(
@@ -907,12 +981,13 @@ def _run_import(
 
             seen_debaters: dict[int, str] = {}
             speakers = team_data.get("speakers", [])
-            if len(speakers) != 3:
+            # Teams often register reserves, so only a team that can't field three is unusual.
+            if len(speakers) < 3:
                 _issue(
                     report,
                     "warning",
                     "team_size",
-                    f"Team {name!r} has {len(speakers)} speaker(s), not 3",
+                    f"Team {name!r} has only {len(speakers)} speaker(s)",
                 )
             for speaker in speakers:
                 res = _upsert_person(
@@ -929,6 +1004,7 @@ def _run_import(
                     source_url=speaker.get("url"),
                     overrides=overrides.debaters,
                     created_ids=created_ids["debater"],
+                    preview=preview,
                 )
                 debater = res.person
                 if res.created:
@@ -1030,6 +1106,7 @@ def _run_import(
                 source_url=adj.get("url"),
                 overrides=overrides.judges,
                 created_ids=created_ids["judge"],
+                preview=preview,
             )
             judge = res.person
             if res.created:
@@ -1389,6 +1466,7 @@ def import_tournament(
             report_sink=sink,
             overrides=overrides,
             progress=progress,
+            preview=dry_run,
         )
         if dry_run:
             active_session.rollback()

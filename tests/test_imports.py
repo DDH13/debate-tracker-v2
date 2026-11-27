@@ -395,3 +395,33 @@ def test_batch_imports_in_order_and_refreshes_stats_once(
     assert listed[0]["id"] == batch["id"]
     assert listed[0]["counts"] == {"imported": 2}
     assert listed[0]["tournaments"] == ["Open first", "Open second"]
+
+
+# --- Suggestion rules (found on real data: earlier imports left many debaters school-less) ---
+
+
+def test_person_suggestion_prefers_a_single_schoolless_or_same_school_namesake() -> None:
+    from types import SimpleNamespace as P
+
+    from app.services.tabbycat import _suggest_person
+
+    no_school, same, other = P(id=1, institution_id=None), P(id=2, institution_id=7), P(id=3, institution_id=9)
+    assert _suggest_person([no_school], 7, "debater") == 1
+    assert _suggest_person([same], 7, "debater") == 2
+    assert _suggest_person([other], 7, "debater") == "new"
+    assert _suggest_person([no_school, other], 7, "debater") == 1
+    assert _suggest_person([no_school, same], 7, "debater") is None  # duplicates already: a human picks
+    assert _suggest_person([other], 7, "judge") == 3  # judges move between schools
+
+
+def test_school_suggestion_is_left_open_when_two_different_schools_tie() -> None:
+    from types import SimpleNamespace as C
+
+    from app.services.tabbycat import _suggest_school
+
+    gampaha = C(id=1, name="Lyceum International School Gampaha", score=0.954)
+    wattala = C(id=2, name="Lyceum International School Wattala", score=0.954)
+    assert _suggest_school([gampaha, wattala]) is None
+    moir, moir_dup = C(id=3, name="Elizabeth Moir School", score=0.933), C(id=4, name="Elizabeth Moir school", score=0.933)
+    assert _suggest_school([moir, moir_dup]) == 3  # same name twice is one school
+    assert _suggest_school([C(id=5, name="Nalanda College", score=0.915)]) == "new"
