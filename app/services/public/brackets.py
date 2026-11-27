@@ -52,10 +52,6 @@ class Bracket:
             return {t for d in last.debates for t in (d.prop_team_id, d.opp_team_id)}
         return {d.winner_team_id for d in last.debates if d.winner_team_id is not None}
 
-    def complete(self) -> bool:
-        last = self.rounds[-1]
-        return len(last.debates) == 1 and last.debates[0].winner_team_id is not None
-
 
 def _teams(round_: ElimRound) -> set[int]:
     return {t for d in round_.debates for t in (d.prop_team_id, d.opp_team_id)}
@@ -126,8 +122,9 @@ def derive_brackets(elim_rounds: list[ElimRound]) -> list[Bracket]:
         best: Bracket | None = None
         best_overlap = 0
         for bracket in brackets:
-            if bracket.complete():
-                continue
+            # A bracket is never closed up front: a single decided debate may be a play-in
+            # before byes ("Partial Octos"), and it only ends when no later round carries its
+            # winners on (a novice bracket after the grand final shares no team with it).
             overlap = len(bracket.alive() & teams)
             if overlap > best_overlap:
                 best, best_overlap = bracket, overlap

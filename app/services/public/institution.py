@@ -19,7 +19,9 @@ from app.models import (
     Judge,
     Round,
     SchoolParticipation,
+    Side,
     Team,
+    TeamMember,
 )
 from app.services.public import field
 from app.services.public.loaders import debater_refs, institution_ref, judge_refs, person_name
@@ -33,6 +35,7 @@ from app.services.public.schemas import (
     metric,
     win_loss,
 )
+from app.services.public.schools import latest_team_school, school_id
 from app.services.public.snapshots import tournament_snapshot
 from app.services.stats.history import tournament_averages
 
@@ -128,17 +131,39 @@ def build_public_institution(session: Session, institution: Institution) -> Publ
     snapshots = {tid: s for tid, s in snapshots.items() if s is not None}
     field_average = {t.tournament_id: t.average for t in tournament_averages(session)}
 
-    people = debater_refs(
-        session, (d for s in snapshots.values() for t in s.teams.values() if t.institution_id == iid for d in t.debater_ids)
-    )
+    # Live rows, not the cached snapshot (which may predate a team): the school's own teams,
+    # their members, and a decided-debate record that leaves out intra-school debates.
+    own_ids = {t.id for t in own_teams}
+    members_by_team: dict[int, list[int]] = defaultdict(list)
+    for team_id, member_id in session.exec(
+        select(TeamMember.team_id, TeamMember.debater_id)
+        .where(TeamMember.team_id.in_(own_ids or {-1}))
+        .order_by(TeamMember.id)
+    ).all():
+        members_by_team[team_id].append(member_id)
+    people = debater_refs(session, (d for ds in members_by_team.values() for d in ds))
+    record: dict[int, list[int]] = defaultdict(lambda: [0, 0])  # tournament -> [wins, losses]
+    if own_ids:
+        for tournament_id, prop, opp, winner in session.exec(
+            select(Round.tournament_id, Debate.prop_team_id, Debate.opp_team_id, Debate.winner)
+            .join(Round, Debate.round_id == Round.id)
+            .where(
+                Debate.winner.is_not(None),
+                Debate.prop_team_id.in_(own_ids) | Debate.opp_team_id.in_(own_ids),
+            )
+        ).all():
+            if prop in own_ids and opp in own_ids:
+                continue  # intra-school: no net result for the school
+            won = (winner == Side.PROP) == (prop in own_ids)
+            record[tournament_id][0 if won else 1] += 1
     inst_ref = institution_ref(institution)
 
     team_rows: list[InstitutionTeamRow] = []
     history: dict[int, HistoryRow] = {}
     series: list[SeriesPoint] = []
     for tid, snap in snapshots.items():
-        mine = [t for t in snap.teams.values() if t.institution_id == iid]
-        wins = losses = 0
+        mine = [t for t in own_teams if t.tournament_id == tid]
+        wins, losses = record[tid] if tid in record else (0, 0)
         speaks_total = 0.0
         speaks_count = 0.0
         best_finish: str | None = None
@@ -147,8 +172,6 @@ def build_public_institution(session: Session, institution: Institution) -> Publ
             standing = snap.standing_by_team.get(team.id)
             finish = snap.finishes.get(team.id)
             if standing:
-                wins += standing.prelim_wins + standing.elim_wins
-                losses += standing.prelim_losses + standing.elim_losses
                 if standing.average_speaks:
                     speaks_total += standing.total_speaks
                     speaks_count += standing.total_speaks / standing.average_speaks
@@ -159,7 +182,7 @@ def build_public_institution(session: Session, institution: Institution) -> Publ
                 InstitutionTeamRow(
                     tournament=snap.tournament,
                     team=TeamRef(id=team.id, name=team.name, institution=inst_ref),
-                    speakers=[people[d] for d in team.debater_ids if d in people],
+                    speakers=[people[d] for d in members_by_team[team.id] if d in people],
                     rank=standing.rank if standing else None,
                     prelim=win_loss(standing.prelim_wins, standing.prelim_losses) if standing else WinLoss(),
                     elim=win_loss(standing.elim_wins, standing.elim_losses) if standing else WinLoss(),
@@ -219,6 +242,7 @@ def build_public_institution(session: Session, institution: Institution) -> Publ
         reverse=True,
     )
 
+    latest = latest_team_school()
     roster = [
         RosterRow(
             debater=PersonRef(id=d.id, name=person_name(d, "Debater")),
@@ -231,7 +255,8 @@ def build_public_institution(session: Session, institution: Institution) -> Publ
         for d, p in session.exec(
             select(Debater, DebaterProfile)
             .join(DebaterProfile, DebaterProfile.debater_id == Debater.id, isouter=True)
-            .where(Debater.institution_id == iid)
+            .join(latest, latest.c.debater_id == Debater.id, isouter=True)
+            .where(school_id(latest) == iid)
         ).all()
     ]
     roster.sort(key=lambda r: (-r.rounds, r.debater.name))

@@ -9,7 +9,14 @@ router = APIRouter(prefix="/debaters", tags=["public"])
 
 
 # Static before `/{debater_id}`; the list is the root of this router.
-@router.get("", response_model=lists.DebaterList)
+@router.get(
+    "",
+    response_model=lists.DebaterList,
+    description=(
+        "Paged debater list. `order=desc` means best first for every sort, so `sort=rank` "
+        "(lower is better) lists rank 1 first with `desc` and the worst rank first with `asc`."
+    ),
+)
 def list_public_debaters(
     session: SessionDep,
     q: str | None = None,

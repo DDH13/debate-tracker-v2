@@ -8,6 +8,7 @@ institution / champion reference so the UI never looks names up per row.
 from datetime import date, datetime
 from typing import Literal
 
+from sqlalchemy import ColumnElement
 from sqlalchemy import func as sa_func
 from sqlmodel import Session, SQLModel, col, func, select
 
@@ -25,17 +26,18 @@ from app.services.public import field
 from app.services.public.brackets import derive_brackets
 from app.services.public.loaders import institution_ref, institution_refs, team_refs, tournament_ref
 from app.services.public.schemas import InstitutionRef, Page, PersonRef, TeamRef, TournamentRef
+from app.services.public.schools import latest_team_school, school_id
 from app.services.public.snapshots import elim_rounds_by_tournament
 
 Order = Literal["asc", "desc"]
 
 
-def _ordered(expression, order: Order, id_column):
+def _ordered(expression: ColumnElement, order: Order, id_column: ColumnElement) -> tuple[ColumnElement, ColumnElement]:
     direction = expression.asc() if order == "asc" else expression.desc()
     return (direction.nulls_last(), id_column.asc())
 
 
-def _name_expression(model):
+def _name_expression(model: type[Debater] | type[Judge]) -> ColumnElement:
     return func.coalesce(
         model.full_name, func.trim(func.coalesce(model.first_name, "") + " " + func.coalesce(model.last_name, ""))
     )
@@ -89,18 +91,24 @@ def list_debaters(
         "rank": DebaterProfile.speaker_rank,
         "stdev": DebaterProfile.speaker_score_stdev,
     }
+    latest = latest_team_school()
+    school = school_id(latest)
     base = (
         select(Debater, Institution, DebaterProfile)
-        .join(Institution, Debater.institution_id == Institution.id, isouter=True)
+        .join(latest, latest.c.debater_id == Debater.id, isouter=True)
+        .join(Institution, school == Institution.id, isouter=True)
         .join(DebaterProfile, DebaterProfile.debater_id == Debater.id, isouter=True)
     )
     if q and q.strip():
         base = base.where(name.icontains(q.strip(), autoescape=True))
     if institution_id is not None:
-        base = base.where(Debater.institution_id == institution_id)
+        base = base.where(school == institution_id)
     if min_rounds > 0:
         base = base.where(DebaterProfile.total_rounds >= min_rounds)
     total = session.exec(select(func.count()).select_from(base.subquery())).one()
+    if sort == "rank":
+        # Lower rank is better, so best-first ("desc", the default) runs ascending.
+        order = "asc" if order == "desc" else "desc"
     rows = session.exec(
         base.order_by(*_ordered(sort_columns[sort], order, Debater.id)).offset(offset).limit(limit)
     ).all()

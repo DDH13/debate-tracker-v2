@@ -53,8 +53,8 @@ def registry(
 def list_judge_records(
     session: SessionDep,
     institution_id: int | None = None,
-    offset: int = 0,
-    limit: int = Query(default=100, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> list[Judge]:
     """Full judge records, personal fields included."""
     query = select(Judge).order_by(col(Judge.id))

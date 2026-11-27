@@ -31,8 +31,8 @@ def list_debater_records(
     session: SessionDep,
     institution_id: int | None = None,
     q: str | None = None,
-    offset: int = 0,
-    limit: int = Query(default=100, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> list[Debater]:
     """Full debater records, personal fields included."""
     query = select(Debater).order_by(col(Debater.id))

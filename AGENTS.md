@@ -111,6 +111,7 @@ is covered automatically, and a new public write must be added there deliberatel
     database; `create_all` never adds indexes to existing tables. Create-if-not-exists only.
 - `app/services/text.py` — pure name/text normalization (`normalize_text`, `name_key`,
   `split_name`, `tidy_case`, `institution_key`, `jaro_winkler`). No DB access.
+- `app/services/public/schools.py` — the one rule for a debater's school: `Debater.institution_id`, else the institution of their most recent team. Reuse `latest_team_school()` / `school_id()` for the debater page, school roster and counts, debater list and search; never read `Debater.institution_id` alone in the public API.
 - `app/services/institutions.py` — `find_matching_institution` (key equality, used by the
   importer) and `similar_institutions` (fuzzy, human-facing search only — never auto-match
   on Jaro-Winkler).

@@ -27,6 +27,7 @@ from app.models import (
     Team,
 )
 from app.services.public import cache
+from app.services.public.schools import latest_team_school, school_id
 from app.services.public.snapshots import elim_rounds_by_tournament, team_finishes
 from app.services.public.brackets import derive_brackets
 
@@ -188,8 +189,14 @@ def _build_institution_aggregates(session: Session) -> InstitutionAggregates:
     ).all():
         agg(iid).teams = teams
         agg(iid).tournaments = tournaments
+    latest = latest_team_school()
+    effective = school_id(latest)
     for iid, count in session.exec(
-        select(Debater.institution_id, func.count()).where(Debater.institution_id.is_not(None)).group_by(Debater.institution_id)
+        select(effective, func.count())
+        .select_from(Debater)
+        .join(latest, latest.c.debater_id == Debater.id, isouter=True)
+        .where(effective.is_not(None))
+        .group_by(effective)
     ).all():
         agg(iid).debaters = count
     for iid, count in session.exec(

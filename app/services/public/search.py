@@ -3,12 +3,13 @@
 
 from typing import Literal
 
-from sqlalchemy import case
+from sqlalchemy import ColumnElement, case
 from sqlmodel import Session, SQLModel, col, select
 
 from app.models import Debater, DebaterProfile, Institution, Judge, JudgeProfile, Team, Tournament
 from app.services.public import field
 from app.services.public.lists import _name_expression
+from app.services.public.schools import latest_team_school, school_id
 
 MIN_QUERY_LENGTH = 2
 
@@ -35,7 +36,7 @@ def _join(*parts: str | None) -> str | None:
     return text or None
 
 
-def _prefix_first(name, q: str):
+def _prefix_first(name: ColumnElement, q: str) -> tuple[ColumnElement, ColumnElement]:
     return (case((name.istartswith(q, autoescape=True), 0), else_=1), name)
 
 
@@ -43,6 +44,7 @@ def search(session: Session, q: str, limit: int) -> SearchResults:
     q = q.strip()
 
     debater_name = _name_expression(Debater)
+    latest = latest_team_school()
     debaters = [
         SearchHit(
             kind="debater",
@@ -62,7 +64,8 @@ def search(session: Session, q: str, limit: int) -> SearchResults:
                 DebaterProfile.total_rounds,
                 DebaterProfile.average_speaker_score,
             )
-            .join(Institution, Debater.institution_id == Institution.id, isouter=True)
+            .join(latest, latest.c.debater_id == Debater.id, isouter=True)
+            .join(Institution, school_id(latest) == Institution.id, isouter=True)
             .join(DebaterProfile, DebaterProfile.debater_id == Debater.id, isouter=True)
             .where(debater_name.icontains(q, autoescape=True))
             .order_by(*_prefix_first(debater_name, q), Debater.id)

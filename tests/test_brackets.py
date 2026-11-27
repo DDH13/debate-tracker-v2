@@ -78,3 +78,31 @@ def test_empty_and_deep_rounds() -> None:
     (bracket,) = derive_brackets([_round(1, "Round of 32", *sixteen)])
     assert bracket.finishes[2] == "broke"
     assert bracket.finishes[1] == "octo"
+
+
+def test_single_debate_play_in_round_belongs_to_the_main_bracket() -> None:
+    rounds = [
+        _round(5, "Partial Octos", (1, 2, 1)),  # one play-in debate, everyone else had a bye
+        _round(6, "Quarters", (1, 3, 1), (4, 5, 4), (6, 7, 6), (8, 9, 8)),
+        _round(7, "Semis", (1, 4, 1), (6, 8, 6)),
+        _round(8, "Grand Final", (1, 6, 6)),
+    ]
+    (bracket,) = derive_brackets(rounds)
+    assert bracket.label == "Grand Final" and bracket.primary
+    assert bracket.champion_team_id == 6 and bracket.finalist_team_id == 1
+    assert bracket.finishes[2] == "octo"  # lost the play-in, still counted as a break
+    assert bracket.finishes[3] == "quarter"
+    assert {1, 2, 3, 9} <= bracket.team_ids
+
+
+def test_play_in_round_with_a_later_novice_bracket() -> None:
+    rounds = [
+        _round(5, "Partial Octos", (1, 2, 1)),
+        _round(6, "Quarters", (1, 3, 1), (4, 5, 4), (6, 7, 6), (8, 9, 8)),
+        _round(7, "Semis", (1, 4, 1), (6, 8, 6)),
+        _round(8, "Grand Final", (1, 6, 6)),
+        _round(9, "Novice Finals", (21, 22, 22)),
+    ]
+    open_bracket, novice = derive_brackets(rounds)
+    assert open_bracket.label == "Grand Final" and open_bracket.primary
+    assert novice.label == "Novice Finals" and not novice.primary

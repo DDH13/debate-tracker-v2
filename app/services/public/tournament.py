@@ -162,7 +162,9 @@ def build_public_tournament(session: Session, snapshot: TournamentSnapshot) -> P
 
     standings = []
     for entry in snapshot.standings:
-        team = snapshot.teams[entry.team_id]
+        team = snapshot.teams.get(entry.team_id)
+        if team is None or entry.team_id not in teams:
+            continue
         finish = snapshot.finishes.get(entry.team_id)
         standings.append(
             StandingRow(

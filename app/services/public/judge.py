@@ -132,9 +132,13 @@ def build_public_judge(session: Session, judge: Judge) -> PublicJudge:
         .where(Ballot.judge_id == jid)
     ).all()
     debate_round: dict[int, Round] = {d.id: r for _l, d, r in links}
-    for ballot, _winner, round_id in my_ballots:  # a ballot without a panel link still counts
-        if ballot.debate_id not in debate_round:
-            debate_round[ballot.debate_id] = session.get(Round, round_id)
+    # A ballot without a panel link still counts: fetch those rounds in one query.
+    missing_rounds = {round_id for b, _w, round_id in my_ballots if b.debate_id not in debate_round}
+    if missing_rounds:
+        rounds_by_id = {r.id: r for r in session.exec(select(Round).where(Round.id.in_(missing_rounds))).all()}
+        for ballot, _winner, round_id in my_ballots:
+            if ballot.debate_id not in debate_round:
+                debate_round[ballot.debate_id] = rounds_by_id[round_id]
     debate_ids = sorted(debate_round)
 
     # Position averages and per-tournament average: counted speeches this judge scored.
@@ -171,12 +175,16 @@ def build_public_judge(session: Session, judge: Judge) -> PublicJudge:
     opp_votes = len(counted) - prop_votes
     judged = [(b, w) for b, w in counted if w is not None]
     minority = sum(1 for b, w in judged if b.winner != w)
-    unanimous = sum(
-        1
-        for debate_id in debate_ids
-        if len({b.winner for b in panel_ballots.get(debate_id, []) if not b.discarded}) == 1
-        and any(b.judge_id == jid and not b.discarded for b in panel_ballots[debate_id])
-    )
+    unanimous = 0
+    for debate_id in debate_ids:
+        counted_ballots = [b for b in panel_ballots.get(debate_id, []) if not b.discarded]
+        # A solo-judged debate is not a unanimous panel: it needs at least two counted ballots.
+        if (
+            len(counted_ballots) >= 2
+            and len({b.winner for b in counted_ballots}) == 1
+            and any(b.judge_id == jid for b in counted_ballots)
+        ):
+            unanimous += 1
 
     # Roles.
     chaired = sum(1 for l, _d, _r in links if l.is_chair and not l.is_trainee)

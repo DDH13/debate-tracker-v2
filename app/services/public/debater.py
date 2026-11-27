@@ -43,6 +43,7 @@ from app.services.public.schemas import (
     metric,
     win_loss,
 )
+from app.services.public.schools import debater_school_id
 from app.services.public.snapshots import tournament_snapshot
 from app.services.stats import core
 from app.services.stats.history import tournament_averages
@@ -165,9 +166,13 @@ def build_public_debater(session: Session, debater: Debater) -> PublicDebater:
         )
     ).all():
         panels[(debate_id, score.side, int(score.position))].append(score)
-        if debate_id not in debate_info:  # scored without being on the roster (data quirk)
-            debate = session.get(Debate, debate_id)
-            debate_info[debate_id] = (debate, session.get(Round, debate.round_id))
+    # Scored without being on the roster (data quirk): fetch those debates in one query.
+    off_roster = {key[0] for key in panels} - set(debate_info)
+    if off_roster:
+        for debate, round_ in session.exec(
+            select(Debate, Round).join(Round, Debate.round_id == Round.id).where(Debate.id.in_(off_roster))
+        ).all():
+            debate_info[debate.id] = (debate, round_)
 
     all_debate_ids = list(debate_info)
     margins = scores.debate_margins(session, debate_ids=all_debate_ids)
@@ -267,14 +272,20 @@ def build_public_debater(session: Session, debater: Debater) -> PublicDebater:
 
     # --- per-tournament rows
     field_average = {t.tournament_id: t.average for t in tournament_averages(session)}
+    # Team members come from live rows, not the (possibly stale, cached) snapshot.
+    members_by_team: dict[int, list[int]] = defaultdict(list)
+    for team_id, member_id in session.exec(
+        select(TeamMember.team_id, TeamMember.debater_id)
+        .where(TeamMember.team_id.in_(my_team_ids or {-1}))
+        .order_by(TeamMember.id)
+    ).all():
+        members_by_team[team_id].append(member_id)
     partner_ids: dict[int, set[int]] = defaultdict(set)
     tournaments_rows: list[DebaterTournamentRow] = []
     for team in team_rows:
-        snap = snapshots.get(team.tournament_id)
-        if snap is None:
+        if team.tournament_id not in snapshots:
             continue
-        info = snap.teams[team.id]
-        for other in info.debater_ids:
+        for other in members_by_team[team.id]:
             if other != did:
                 partner_ids[other].add(team.tournament_id)
     people = debater_refs(session, partner_ids)
@@ -282,7 +293,6 @@ def build_public_debater(session: Session, debater: Debater) -> PublicDebater:
         snap = snapshots.get(team.tournament_id)
         if snap is None:
             continue
-        info = snap.teams[team.id]
         entry = snap.tab_by_debater.get(did)
         standing = snap.standing_by_team.get(team.id)
         finish = snap.finishes.get(team.id)
@@ -290,8 +300,8 @@ def build_public_debater(session: Session, debater: Debater) -> PublicDebater:
         tournaments_rows.append(
             DebaterTournamentRow(
                 tournament=snap.tournament,
-                team=teams[team.id],
-                partners=[people[o] for o in info.debater_ids if o != did and o in people],
+                team=teams.get(team.id),
+                partners=[people[o] for o in members_by_team[team.id] if o != did and o in people],
                 average=_rounded(_mean(by_tournament_scores.get(team.tournament_id, []))),
                 speeches=len(by_tournament_scores.get(team.tournament_id, [])),
                 rank=entry.rank if entry else None,
@@ -307,14 +317,8 @@ def build_public_debater(session: Session, debater: Debater) -> PublicDebater:
         )
     tournaments_rows.sort(key=lambda r: (r.tournament.date or date.min, r.tournament.id), reverse=True)
 
-    institution = (
-        institution_refs(session, [debater.institution_id]).get(debater.institution_id)
-        if debater.institution_id is not None
-        else None
-    )
-    if institution is None and tournaments_rows:
-        # Imported debaters often have no school of their own: use the latest team's.
-        institution = next((r.team.institution for r in tournaments_rows if r.team and r.team.institution), None)
+    school = debater_school_id(session, debater)  # own school, else the latest team's
+    institution = institution_refs(session, [school]).get(school) if school is not None else None
     prelim_total = sum(prelim_wl)
     summary = DebaterSummary(
         tournaments=len({r.tournament_id for r in records} | {t.tournament_id for t in team_rows}),

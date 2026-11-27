@@ -1,6 +1,7 @@
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
@@ -40,7 +41,9 @@ PUBLIC_CACHE_CONTROL = "public, max-age=60, stale-while-revalidate=300"
 
 
 @app.middleware("http")
-async def public_cache_middleware(request: Request, call_next):
+async def public_cache_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     response = await call_next(request)
     if request.method not in ("GET", "HEAD", "OPTIONS") and response.status_code < 400:
         # Anything that changed data invalidates the public pages' in-process cache.
