@@ -25,6 +25,7 @@ from app.models import (
     TeamMember,
 )
 from app.services.public import field, scores
+from app.services.public.categories import CATEGORIES, SCALES, Category
 from app.services.public.loaders import (
     debater_refs,
     institution_refs,
@@ -114,11 +115,67 @@ class PartnerRow(SQLModel):
     tournaments: int
 
 
+class CategoryTriple(SQLModel):
+    content: float | None = None
+    style: float | None = None
+    strategy: float | None = None
+
+
+class CategoryByTournament(SQLModel):
+    tournament: TournamentRef
+    speeches: int
+    average: CategoryTriple
+
+
+class CategoryByPosition(SQLModel):
+    position: int
+    speeches: int
+    average: CategoryTriple
+    field: CategoryTriple
+
+
+class CategoryResult(SQLModel):
+    speeches: int
+    average: CategoryTriple
+
+
+class CategoryByResult(SQLModel):
+    won: CategoryResult
+    lost: CategoryResult
+    field_gap: CategoryTriple  # field mean in wins minus field mean in losses
+
+
+class CategoryBest(SQLModel):
+    category: Category
+    scale: int
+    mark: float
+    debate_id: int
+    round: RoundRef
+    tournament: TournamentRef
+
+
+class CategoryAverages(SQLModel):
+    content: Metric
+    style: Metric
+    strategy: Metric
+
+
+class DebaterCategories(SQLModel):
+    speeches: int  # prelim substantive speeches behind the averages
+    averages: CategoryAverages
+    by_tournament: list[CategoryByTournament]  # oldest first, prelims
+    by_position: list[CategoryByPosition]
+    by_result: CategoryByResult
+    bests: list[CategoryBest]  # every substantive speech, elims included
+    spread: CategoryTriple  # standard deviation per category, prelims
+
+
 class PublicDebater(SQLModel):
     debater: PersonRef
     institution: InstitutionRef | None
     profile_computed_at: datetime | None
     summary: DebaterSummary
+    categories: DebaterCategories
     tournaments: list[DebaterTournamentRow]
     positions: list[PositionCell]
     speeches: list[SpeechRow]
@@ -346,6 +403,7 @@ def build_public_debater(session: Session, debater: Debater) -> PublicDebater:
         institution=institution,
         profile_computed_at=profile.computed_at if profile else means.profile_computed_at,
         summary=summary,
+        categories=debater_categories(speech_rows, means),
         tournaments=tournaments_rows,
         positions=positions,
         speeches=speech_rows,
@@ -353,6 +411,87 @@ def build_public_debater(session: Session, debater: Debater) -> PublicDebater:
             (PartnerRow(debater=people[p], tournaments=len(t)) for p, t in partner_ids.items() if p in people),
             key=lambda r: (-r.tournaments, r.debater.name),
         ),
+    )
+
+
+def _triple(rows: list[SpeechRow], digits: int = 4) -> CategoryTriple:
+    return CategoryTriple(
+        **{
+            name: None if not (vals := [getattr(r, name) for r in rows]) else round(sum(vals) / len(vals), digits)
+            for name in CATEGORIES
+        }
+    )
+
+
+def debater_categories(speech_rows: list[SpeechRow], means: field.FieldMeans) -> DebaterCategories:
+    """Content / style / strategy from the speeches the page already loaded. Each speech row
+    is a panel mean, so a three-judge panel counts once. Replies and speeches missing any of
+    the three marks are left out; averages, splits and spread use prelims only, bests every
+    substantive speech (rows arrive most recent first, so a tie keeps the latest)."""
+    marked = [
+        r for r in speech_rows
+        if r.position != 4 and r.content is not None and r.style is not None and r.strategy is not None
+    ]
+    prelim = [r for r in marked if not r.round.is_elimination]
+    n = len(prelim)
+    enough = n >= field.MIN_DEBATER_SPEECHES
+    triple = _triple(prelim)
+    field_means = {
+        "content": means.debater_content, "style": means.debater_style, "strategy": means.debater_strategy
+    }
+    averages = CategoryAverages(
+        **{name: metric(getattr(triple, name), field_means[name] if enough else None) for name in CATEGORIES}
+    )
+
+    groups: dict[int, list[SpeechRow]] = defaultdict(list)
+    for r in prelim:
+        groups[r.tournament.id].append(r)
+    by_tournament = [
+        CategoryByTournament(tournament=g[0].tournament, speeches=len(g), average=_triple(g))
+        for g in groups.values()
+    ]
+    by_tournament.sort(key=lambda t: (t.tournament.date or date.min, t.tournament.id))
+
+    by_position = [
+        CategoryByPosition(
+            position=position,
+            speeches=len(rows := [r for r in prelim if r.position == position]),
+            average=_triple(rows),
+            field=CategoryTriple(
+                **{name: means.position_category_means.get((position, name)) for name in CATEGORIES}
+            ),
+        )
+        for position in (1, 2, 3)
+    ]
+    won = [r for r in prelim if r.won is True]
+    lost = [r for r in prelim if r.won is False]
+    by_result = CategoryByResult(
+        won=CategoryResult(speeches=len(won), average=_triple(won)),
+        lost=CategoryResult(speeches=len(lost), average=_triple(lost)),
+        field_gap=CategoryTriple(**{name: means.category_result_gap.get(name) for name in CATEGORIES}),
+    )
+
+    bests: list[CategoryBest] = []
+    for name in CATEGORIES:
+        best: SpeechRow | None = None
+        for r in marked:
+            if best is None or getattr(r, name) > getattr(best, name):
+                best = r
+        if best is not None:
+            bests.append(
+                CategoryBest(
+                    category=name, scale=SCALES[name], mark=getattr(best, name), debate_id=best.debate_id,
+                    round=best.round, tournament=best.tournament,
+                )
+            )
+
+    spread = CategoryTriple(
+        **{name: round(pstdev(vals), 4) if len(vals := [getattr(r, name) for r in prelim]) > 1 else None
+           for name in CATEGORIES}
+    )
+    return DebaterCategories(
+        speeches=n, averages=averages, by_tournament=by_tournament, by_position=by_position,
+        by_result=by_result, bests=bests, spread=spread,
     )
 
 

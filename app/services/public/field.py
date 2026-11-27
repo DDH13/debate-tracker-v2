@@ -66,6 +66,10 @@ class FieldMeans:
     ballot_prop_rate: float | None = None
     # (side, position) -> mean prelim score, from counted ballots.
     position_means: dict[tuple[str, int], float] = field(default_factory=dict)
+    # (position 1-3, category) -> mean prelim mark, one panel mean per speech.
+    position_category_means: dict[tuple[int, str], float] = field(default_factory=dict)
+    # category -> mean mark in won debates minus mean in lost ones, over prelim speeches.
+    category_result_gap: dict[str, float] = field(default_factory=dict)
 
 
 def _build_field_means(session: Session) -> FieldMeans:
@@ -131,7 +135,51 @@ def _build_field_means(session: Session) -> FieldMeans:
         .group_by(SpeakerScore.side, SpeakerScore.position)
     ).all():
         means.position_means[(side.value, int(position))] = round(float(avg), 4)
+    _category_field_means(session, means)
     return means
+
+
+def _category_field_means(session: Session, means: FieldMeans) -> None:
+    """Fills the content / style / strategy figures from one grouped query: one panel mean
+    per prelim substantive speech, tagged with its position and whether its side won."""
+    by_position: dict[int, list[tuple[float, float, float]]] = defaultdict(list)
+    results: dict[bool, list[tuple[float, float, float]]] = {True: [], False: []}
+    for position, side, winner, content, style, strategy in session.exec(
+        select(
+            SpeakerScore.position,
+            SpeakerScore.side,
+            Debate.winner,
+            func.avg(SpeakerScore.content),
+            func.avg(SpeakerScore.style),
+            func.avg(SpeakerScore.strategy),
+        )
+        .join(Ballot, SpeakerScore.ballot_id == Ballot.id)
+        .join(Debate, Ballot.debate_id == Debate.id)
+        .join(Round, Debate.round_id == Round.id)
+        .where(
+            Ballot.discarded == False,  # noqa: E712
+            Ballot.forfeit == False,  # noqa: E712
+            Round.isElimination == False,  # noqa: E712
+            SpeakerScore.position != SpeakerPosition.REPLY,
+            SpeakerScore.content.is_not(None),
+            SpeakerScore.style.is_not(None),
+            SpeakerScore.strategy.is_not(None),
+        )
+        .group_by(SpeakerScore.debater_id, Ballot.debate_id, SpeakerScore.position, SpeakerScore.side, Debate.winner)
+    ).all():
+        marks = (float(content), float(style), float(strategy))
+        by_position[int(position)].append(marks)
+        if winner is not None:
+            results[winner == side].append(marks)
+    names = ("content", "style", "strategy")
+    for position, rows in by_position.items():
+        for i, name in enumerate(names):
+            means.position_category_means[(position, name)] = round(sum(r[i] for r in rows) / len(rows), 4)
+    if results[True] and results[False]:
+        for i, name in enumerate(names):
+            won = sum(r[i] for r in results[True]) / len(results[True])
+            lost = sum(r[i] for r in results[False]) / len(results[False])
+            means.category_result_gap[name] = round(won - lost, 4)
 
 
 def field_means(session: Session) -> FieldMeans:

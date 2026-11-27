@@ -3,9 +3,9 @@
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from sqlmodel import Session, SQLModel, select
+from sqlmodel import Session, SQLModel, func, select
 
-from app.models import Ballot, Debater, Round, SpeakerPosition, SpeakerScore, Tournament
+from app.models import Ballot, Debate, Debater, Round, SpeakerPosition, SpeakerScore, Tournament
 from app.services.stats import core
 from app.services.stats import tournament as tournament_stats
 
@@ -133,21 +133,34 @@ def compute_debater_aggregates(session: Session) -> dict[int, DebaterAggregate]:
                 }
             )
 
+    # Category averages follow the speaker-average rule: one panel mean per speech (debate +
+    # position), substantive positions and prelims only, so the three add up to the score average.
     category_rows = session.exec(
-        select(SpeakerScore.debater_id, SpeakerScore.content, SpeakerScore.style, SpeakerScore.strategy)
+        select(
+            SpeakerScore.debater_id,
+            func.avg(SpeakerScore.content),
+            func.avg(SpeakerScore.style),
+            func.avg(SpeakerScore.strategy),
+        )
         .join(Ballot, SpeakerScore.ballot_id == Ballot.id)
+        .join(Debate, Ballot.debate_id == Debate.id)
+        .join(Round, Debate.round_id == Round.id)
         .where(
             Ballot.discarded == False,  # noqa: E712
             Ballot.forfeit == False,  # noqa: E712
+            Round.isElimination == False,  # noqa: E712
             SpeakerScore.position != SpeakerPosition.REPLY,
             SpeakerScore.content.is_not(None),
+            SpeakerScore.style.is_not(None),
+            SpeakerScore.strategy.is_not(None),
         )
+        .group_by(SpeakerScore.debater_id, Ballot.debate_id, SpeakerScore.position)
     ).all()
     for debater_id, content, style, strategy in category_rows:
         agg = aggregates[debater_id]
-        agg.content_scores.append(content)
-        agg.style_scores.append(style)
-        agg.strategy_scores.append(strategy)
+        agg.content_scores.append(float(content))
+        agg.style_scores.append(float(style))
+        agg.strategy_scores.append(float(strategy))
 
     return dict(aggregates)
 
