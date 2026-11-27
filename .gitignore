@@ -9,3 +9,6 @@ venv/
 debate_tracker.db
 .cache/
 .import-staging/
+
+# Tournament lists for imports hold Tabbycat API keys
+scripts/tournaments.csv

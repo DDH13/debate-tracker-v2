@@ -1,4 +1,7 @@
-"""Import the tournaments in tournaments.csv (base_url,slug) through the API, one by one.
+"""Import the tournaments in tournaments.csv (base_url,slug,api_key) through the API, one by one.
+
+tournaments.csv is git-ignored because it holds Tabbycat API keys; copy
+tournaments.example.csv to start one.
 
 Prefer the console's Import tournaments page (/admin/imports): it checks each tournament,
 shows what would be skipped or duplicated, and runs the import in the background.
