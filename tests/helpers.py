@@ -179,11 +179,13 @@ def build_tournament(
     elim_rounds: int = 1,
     teams: int = 8,
     slug: str = "built-cup",
+    categories: bool = False,
 ) -> dict:
     """Builds a complete tournament: `teams` teams (3 debaters each), a 3-judge panel voting
     2-1, `prelim_rounds` round-robin-paired preliminary rounds, followed by `elim_rounds`
     single-elimination rounds seeded on prelim win count. The lower-indexed team of any pair
     always wins (2-1 on the panel), giving a deterministic win/speaks structure to assert on.
+    With `categories`, ballots carry content / style / strategy marks instead of bare totals.
     """
     assert teams % 2 == 0
 
@@ -226,7 +228,7 @@ def build_tournament(
                 json={
                     "judge_id": judge["id"],
                     "winner": winner,
-                    "scores": _full_score_sheet(
+                    "scores": (_full_score_sheet_with_categories if categories else _full_score_sheet)(
                         team_objs[prop_index]["debaters"], team_objs[opp_index]["debaters"]
                     ),
                 },
@@ -303,12 +305,12 @@ def count_queries(session: Session) -> Iterator[list[str]]:
 
 
 def assert_constant_queries(
-    client: TestClient, session: Session, make_url, *, slack: int = 0, tag: str = ""
+    client: TestClient, session: Session, make_url, *, slack: int = 0, tag: str = "", categories: bool = False
 ) -> None:
     """Builds a small (4 teams) and a larger (8 teams) tournament and asserts `GET
     make_url(data)` runs the same number of queries for both (no query per row)."""
-    small = build_tournament(client, teams=4, prelim_rounds=3, elim_rounds=2, slug=f"small-cup{tag}")
-    large = build_tournament(client, teams=8, prelim_rounds=4, elim_rounds=3, slug=f"large-cup{tag}")
+    small = build_tournament(client, teams=4, prelim_rounds=3, elim_rounds=2, slug=f"small-cup{tag}", categories=categories)
+    large = build_tournament(client, teams=8, prelim_rounds=4, elim_rounds=3, slug=f"large-cup{tag}", categories=categories)
     counts = []
     for data in (small, large):
         session.expire_all()

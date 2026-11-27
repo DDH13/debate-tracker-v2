@@ -49,7 +49,7 @@ def _round(value: float | None, digits: int = 2) -> float | None:
 
 # --- Debaters ---
 
-DebaterSort = Literal["name", "average", "rounds", "tournaments", "win_rate", "rank", "stdev"]
+DebaterSort = Literal["name", "average", "rounds", "tournaments", "win_rate", "rank", "stdev", "content", "style", "strategy"]
 
 
 class DebaterListRow(SQLModel):
@@ -59,6 +59,9 @@ class DebaterListRow(SQLModel):
     rounds: int
     average: float | None
     stdev: float | None
+    content: float | None = None
+    style: float | None = None
+    strategy: float | None = None
     prelim_win_rate: float | None
     speaker_rank: int | None
     percentile: float | None
@@ -90,6 +93,9 @@ def list_debaters(
         "win_rate": DebaterProfile.win_rate_prelims,
         "rank": DebaterProfile.speaker_rank,
         "stdev": DebaterProfile.speaker_score_stdev,
+        "content": DebaterProfile.average_content,
+        "style": DebaterProfile.average_style,
+        "strategy": DebaterProfile.average_strategy,
     }
     latest = latest_team_school()
     school = school_id(latest)
@@ -131,6 +137,9 @@ def list_debaters(
                 rounds=profile.total_rounds if profile else 0,
                 average=_round(profile.average_speaker_score if profile else None),
                 stdev=_round(profile.speaker_score_stdev if profile else None),
+                content=_round(profile.average_content if profile else None),
+                style=_round(profile.average_style if profile else None),
+                strategy=_round(profile.average_strategy if profile else None),
                 prelim_win_rate=_round(profile.win_rate_prelims if profile else None),
                 speaker_rank=profile.speaker_rank if profile else None,
                 percentile=_round(profile.speaker_score_percentile if profile else None, 1),

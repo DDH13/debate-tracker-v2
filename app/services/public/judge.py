@@ -22,7 +22,8 @@ from app.models import (
     SpeakerScore,
 )
 from app.services.public import debates as debate_service
-from app.services.public import field
+from app.services.public import categories, field
+from app.services.public.categories import JudgeCategories
 from app.services.public.loaders import (
     institution_refs,
     judge_refs,
@@ -105,6 +106,7 @@ class PublicJudge(SQLModel):
     institution: InstitutionRef | None
     profile_computed_at: datetime | None
     summary: JudgeSummary
+    categories: JudgeCategories | None  # None below 5 counted ballots
     positions: list[JudgePositionCell]
     decisions: DecisionSplit
     tournaments: list[JudgeTournamentRow]
@@ -312,6 +314,7 @@ def build_public_judge(session: Session, judge: Judge) -> PublicJudge:
             leniency=metric(profile.leniency if profile else None, means.judge_leniency),
             harshness=metric(profile.harshness if profile else None, means.judge_harshness),
         ),
+        categories=categories.judge_categories(categories.category_data(session), jid),
         positions=positions,
         decisions=DecisionSplit(
             prop_votes=prop_votes,

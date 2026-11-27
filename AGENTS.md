@@ -103,6 +103,17 @@ is covered automatically, and a new public write must be added there deliberatel
     non-GET request and adds `Cache-Control: public, max-age=60, stale-while-revalidate=300` to
     `/api/v1/public` GETs. Each gunicorn worker has its own cache, so the TTL bounds staleness.
     `conftest.py` sets the TTL to 0.
+  - **Categories**: a debater's `categories` block (`DebaterCategories`, built in `debater.py` from the
+    speech rows the page already loads, no extra queries) holds prelim-only averages vs the field,
+    `by_tournament`, `by_position` (1-3, with the field mean for that position), `by_result` (won / lost and
+    the field gap), `bests` (all substantive speeches incl. elims, tie -> most recent) and `spread` (pstdev).
+    Replies are excluded (half scale) and a speech is one panel mean. Field figures
+    (`position_category_means`, `category_result_gap`) live in cached `FieldMeans`. `list_debaters` sorts by
+    `content` / `style` / `strategy` (profile columns) and returns them on each row. `categories.py` is the
+    judge side only: figures (>= `MIN_JUDGE_BALLOTS` counted ballots, else `categories` is null) are average,
+    stdev, winner-minus-loser gap as % of scale, and `separation` = 1 - mean pairwise correlation (needs 30
+    marks), each against the mean over qualifying judges; one cached query (`category_data`), never
+    materialized.
   - **No query per row**: `tests/helpers.py` has `count_queries` / `assert_constant_queries`
     (SQLAlchemy `before_cursor_execute`); every page endpoint's test asserts its query count
     doesn't grow between a 4-team and an 8-team tournament. Keep it that way.
@@ -323,6 +334,8 @@ Deliberate choices, mostly inherited from the Java app (v1):
   round scores only. `iron_person_count` still counts prelims and elims.
 - **Judge `score_stdev` uses substantive speeches only**, since replies are on a half scale.
   `average_reply` is still reported separately.
+- **Debater content / style / strategy averages follow the same rule**: one panel mean per speech,
+  substantive positions and prelims only, so the three add up to the speaker average (barring iron speakers).
 - Round scores are normalized as panel mean → drop replies → max over positions spoken
   (iron merge).
 - Kept from v2 on purpose: leniency/harshness as means, competition ranking for ties, and
