@@ -635,3 +635,11 @@ def test_replies_do_not_affect_judge_score_stdev(client: TestClient) -> None:
     assert profile["score_stdev"] == pytest.approx(pstdev(substantive), abs=1e-4)
     assert profile["score_stdev"] < 1.0  # including the half-scale replies would give ~15
     assert profile["average_reply"] == pytest.approx(37.75)  # replies are still averaged on their own
+
+
+def test_summary_mean_speaker_score_leaves_out_replies(client: TestClient) -> None:
+    # Every ballot uses the same sheet: substantives 76, 74.5, 75, 75.5, 75, 74 (mean 75.0)
+    # plus half-scale replies 38 and 37.5, which must not pull the mean down.
+    built = build_tournament(client, prelim_rounds=2, elim_rounds=0, teams=4)
+    summary = client.get(f"/api/v1/tournaments/{built['tournament']['id']}/summary").json()
+    assert summary["mean_speaker_score"] == pytest.approx(75.0)

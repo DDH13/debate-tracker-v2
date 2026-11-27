@@ -17,6 +17,7 @@ from app.models import (
     Motion,
     Round,
     Side,
+    SpeakerPosition,
     SpeakerScore,
     Team,
     TeamMember,
@@ -295,7 +296,10 @@ def tournament_summary(session: Session, tournament_id: int) -> TournamentSummar
         if counted_ballot_ids
         else []
     )
-    mean_score, stdev_score = core.mean_and_stdev([s.final_score for s in scores])
+    # Replies are on a half scale, so they'd drag the mean ~9 points below every speaker average.
+    mean_score, stdev_score = core.mean_and_stdev(
+        [s.final_score for s in scores if s.position != SpeakerPosition.REPLY]
+    )
     content_scores = [s.content for s in scores if s.content is not None]
     style_scores = [s.style for s in scores if s.style is not None]
     strategy_scores = [s.strategy for s in scores if s.strategy is not None]
