@@ -176,6 +176,8 @@ def test_volunteer_cannot_write_or_reach_admin(
 def test_public_reads_stay_open(anon_client: TestClient) -> None:
     assert anon_client.get("/api/v1/tournaments").status_code == 200
     assert anon_client.get("/api/v1/institutions").status_code == 200
+    assert anon_client.get("/api/v1/debaters").status_code == 200
+    assert anon_client.get("/api/v1/judges").status_code == 200
 
 
 # --- admin user management -----------------------------------------------------------

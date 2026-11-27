@@ -308,29 +308,29 @@ def test_find_duplicate_debaters_by_name_and_birthdate(client: TestClient) -> No
     c = _new_debater(client, full_name="JOHN SMITH", birthdate="1999-05-05")
     _new_debater(client, full_name="Unique Person")
 
-    by_name = client.get(f"{API}/debaters/duplicates").json()
+    by_name = client.get(f"{API}/admin/debaters/duplicates").json()
     assert len(by_name) == 1
     assert sorted(m["id"] for m in by_name[0]["members"]) == sorted([a["id"], b["id"], c["id"]])
 
-    by_birthdate = client.get(f"{API}/debaters/duplicates", params={"by": "name_birthdate"}).json()
+    by_birthdate = client.get(f"{API}/admin/debaters/duplicates", params={"by": "name_birthdate"}).json()
     assert len(by_birthdate) == 1
     assert sorted(m["id"] for m in by_birthdate[0]["members"]) == sorted([a["id"], b["id"]])
 
-    assert client.get(f"{API}/debaters/duplicates", params={"by": "nope"}).status_code == 422
+    assert client.get(f"{API}/admin/debaters/duplicates", params={"by": "nope"}).status_code == 422
 
 
 def test_name_birthdate_ignores_missing_birthdates(client: TestClient) -> None:
     _new_debater(client, full_name="No Birthday")
     _new_debater(client, full_name="No Birthday")
-    assert client.get(f"{API}/debaters/duplicates", params={"by": "name_birthdate"}).json() == []
-    assert len(client.get(f"{API}/debaters/duplicates").json()) == 1
+    assert client.get(f"{API}/admin/debaters/duplicates", params={"by": "name_birthdate"}).json() == []
+    assert len(client.get(f"{API}/admin/debaters/duplicates").json()) == 1
 
 
 def test_find_duplicate_judges(client: TestClient) -> None:
     a = _new_judge(client, first_name="Priya", last_name="Patel")
     b = _new_judge(client, full_name="priya patel")
     _new_judge(client, full_name="Someone Else")
-    groups = client.get(f"{API}/judges/duplicates").json()
+    groups = client.get(f"{API}/admin/judges/duplicates").json()
     assert len(groups) == 1
     assert sorted(m["id"] for m in groups[0]["members"]) == sorted([a["id"], b["id"]])
 
@@ -373,7 +373,7 @@ def test_debater_merge_info(client: TestClient) -> None:
         client, scaffold["debate"]["id"], scaffold["judges"][1]["id"], _full_score_sheet(prop, opp)
     )
 
-    resp = client.get(f"{API}/debaters/merge-info")
+    resp = client.get(f"{API}/admin/debaters/merge-info")
     assert resp.status_code == 200
     rows = resp.json()
     assert len(rows) == 6
@@ -394,7 +394,7 @@ def test_judge_merge_info_matches_profile_counts(client: TestClient) -> None:
     _post_ballot(client, scaffold["debate"]["id"], judge["id"], _full_score_sheet(prop, opp))
     client.post(f"{API}/stats/refresh")
 
-    rows = {r["id"]: r for r in client.get(f"{API}/judges/merge-info").json()}
+    rows = {r["id"]: r for r in client.get(f"{API}/admin/judges/merge-info").json()}
     profile = client.get(f"{API}/judges/{judge['id']}/profile").json()
     assert rows[judge["id"]]["prelims_judged"] == profile["prelims_judged"] == 1
     assert rows[judge["id"]]["elims_judged"] == profile["elims_judged"] == 0
@@ -414,7 +414,7 @@ def test_institution_merge_info(client: TestClient) -> None:
             f"{API}/tournaments/{tournament['id']}/teams", json={"name": name, "institution_id": inst["id"]}
         )
 
-    rows = client.get(f"{API}/institutions/merge-info").json()
+    rows = client.get(f"{API}/admin/institutions/merge-info").json()
     assert [r["name"] for r in rows] == ["Aardvark U", "Inst"]
     assert rows[0]["team_count"] == 0
     assert rows[1] == {
@@ -431,11 +431,11 @@ def test_institution_merge_info(client: TestClient) -> None:
 
 def test_static_routes_are_not_shadowed_by_id_routes(client: TestClient) -> None:
     for path in (
-        "/debaters/merge-info",
-        "/debaters/duplicates",
-        "/judges/merge-info",
-        "/judges/duplicates",
-        "/institutions/merge-info",
+        "/admin/debaters/merge-info",
+        "/admin/debaters/duplicates",
+        "/admin/judges/merge-info",
+        "/admin/judges/duplicates",
+        "/admin/institutions/merge-info",
         "/institutions/similar?name=x",
     ):
         resp = client.get(f"{API}{path}")

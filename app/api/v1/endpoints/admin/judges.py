@@ -1,11 +1,12 @@
-from fastapi import APIRouter, HTTPException, status
-from sqlmodel import Session
+from fastapi import APIRouter, HTTPException, Query, status
+from sqlmodel import Session, col, select
 
 from app.api.crud import ListParams, add_crud_routes
 from app.api.deps import SessionDep, get_or_404
 from app.models import (
     Institution,
     Judge,
+    JudgeAdmin,
     JudgeAffiliation,
     JudgeAffiliationCreate,
     JudgeAffiliationPublic,
@@ -16,10 +17,23 @@ from app.models import (
     User,
 )
 from app.services import judges as judge_service
+from app.services import merge
 
 router = APIRouter()
 
 views = APIRouter(prefix="/judges", tags=["admin: judges"])
+
+
+# Static paths before `/{judge_id}...`. These moved here from the public /judges router:
+# they carry personal fields or are merge tooling.
+@views.get("/duplicates", response_model=list[merge.DuplicateGroup])
+def find_duplicate_judges(session: SessionDep) -> list[merge.DuplicateGroup]:
+    return merge.find_duplicates(session, Judge)
+
+
+@views.get("/merge-info", response_model=list[merge.JudgeMergeInfo])
+def judge_merge_info(session: SessionDep) -> list[merge.JudgeMergeInfo]:
+    return merge.judge_merge_info(session)
 
 
 # Static before the `/{judge_id}/...` routes.
@@ -33,6 +47,26 @@ def registry(
     """Every judge with their level, affiliations and involvement (from the imported
     panels), most recently active first. Unpaginated."""
     return judge_service.judge_registry(session, q, level, institution_id)
+
+
+@views.get("", response_model=list[JudgeAdmin])
+def list_judge_records(
+    session: SessionDep,
+    institution_id: int | None = None,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
+) -> list[Judge]:
+    """Full judge records, personal fields included."""
+    query = select(Judge).order_by(col(Judge.id))
+    if institution_id is not None:
+        query = query.where(Judge.institution_id == institution_id)
+    return list(session.exec(query.offset(offset).limit(limit)).all())
+
+
+@views.get("/{judge_id}", response_model=JudgeAdmin)
+def get_judge_record(judge_id: int, session: SessionDep) -> Judge:
+    """The full judge record, personal fields included."""
+    return get_or_404(session, Judge, judge_id)
 
 
 @views.get("/{judge_id}/detail", response_model=judge_service.JudgeDetail)

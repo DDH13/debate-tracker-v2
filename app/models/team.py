@@ -18,8 +18,8 @@ class Team(TeamBase, table=True):
     __table_args__ = (UniqueConstraint("tournament_id", "name"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    tournament_id: int = Field(foreign_key="tournament.id")
-    institution_id: int | None = Field(default=None, foreign_key="institution.id")
+    tournament_id: int = Field(foreign_key="tournament.id", index=True)
+    institution_id: int | None = Field(default=None, foreign_key="institution.id", index=True)
 
     tournament: "Tournament" = Relationship(back_populates="teams")
     institution: Institution | None = Relationship(back_populates="teams")

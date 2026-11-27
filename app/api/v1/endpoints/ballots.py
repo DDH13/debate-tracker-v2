@@ -273,7 +273,9 @@ class DebateResult(SQLModel):
 @router.get("/debates/{debate_id}/result", response_model=DebateResult)
 def get_debate_result(debate_id: int, session: SessionDep) -> DebateResult:
     debate = get_or_404(session, Debate, debate_id)
-    ballots = session.exec(select(Ballot).where(Ballot.debate_id == debate_id)).all()
+    ballots = session.exec(
+        select(Ballot).where(Ballot.debate_id == debate_id, Ballot.discarded == False)  # noqa: E712
+    ).all()
     verdicts = [
         BallotVerdict(ballot_id=b.id, judge_id=b.judge_id, winner=b.winner) for b in ballots
     ]
@@ -281,7 +283,7 @@ def get_debate_result(debate_id: int, session: SessionDep) -> DebateResult:
     scores = session.exec(
         select(SpeakerScore)
         .join(Ballot, SpeakerScore.ballot_id == Ballot.id)
-        .where(Ballot.debate_id == debate_id)
+        .where(Ballot.debate_id == debate_id, Ballot.discarded == False)  # noqa: E712
     ).all()
 
     grouped: dict[tuple[int, Side, SpeakerPosition], list[float]] = {}

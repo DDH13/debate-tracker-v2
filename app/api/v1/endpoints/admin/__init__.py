@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints.admin import (
     board,
+    debaters,
     feedback,
     finance,
     judges,
@@ -32,3 +33,4 @@ router.include_router(tasks.router)
 router.include_router(workshops.router)
 router.include_router(tournament_ops.router)
 router.include_router(judges.router)
+router.include_router(debaters.router)

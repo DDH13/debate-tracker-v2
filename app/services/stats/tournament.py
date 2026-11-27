@@ -17,6 +17,7 @@ from app.models import (
     Motion,
     Round,
     Side,
+    SpeakerPosition,
     SpeakerScore,
     Team,
     TeamMember,
@@ -45,6 +46,7 @@ class TeamStanding(SQLModel):
     team_id: int
     name: str
     institution: str | None
+    institution_id: int | None = None
     prelim_wins: int
     prelim_losses: int
     elim_wins: int
@@ -228,20 +230,21 @@ def team_standings(session: Session, tournament_id: int) -> list[TeamStanding]:
             speaks[team_id].extend(prelim_scores.get(debater_id, {}).values())
 
     standings: list[TeamStanding] = []
-    average_by_team: dict[int, float] = {}
+    rank_keys: dict[int, tuple[float, float]] = {}
     empty_wl = {"prelim_wins": 0, "prelim_losses": 0, "elim_wins": 0, "elim_losses": 0}
     for team, institution_name in teams:
         values = speaks.get(team.id, [])
         total = sum(values)
         average = (total / len(values)) if values else 0.0
-        average_by_team[team.id] = average
         wl = win_loss.get(team.id, empty_wl)
+        rank_keys[team.id] = (wl["prelim_wins"], total)
         standings.append(
             TeamStanding(
                 rank=0,
                 team_id=team.id,
                 name=team.name,
                 institution=institution_name,
+                institution_id=team.institution_id,
                 prelim_wins=wl["prelim_wins"],
                 prelim_losses=wl["prelim_losses"],
                 elim_wins=wl["elim_wins"],
@@ -251,7 +254,8 @@ def team_standings(session: Session, tournament_id: int) -> list[TeamStanding]:
             )
         )
 
-    ranks = core.competition_ranks(average_by_team)
+    # Tabbycat order: prelim wins, then total speaker points.
+    ranks = core.competition_ranks_by(rank_keys)
     for standing in standings:
         standing.rank = ranks[standing.team_id]
     standings.sort(key=lambda s: (s.rank, s.name))
@@ -292,7 +296,10 @@ def tournament_summary(session: Session, tournament_id: int) -> TournamentSummar
         if counted_ballot_ids
         else []
     )
-    mean_score, stdev_score = core.mean_and_stdev([s.final_score for s in scores])
+    # Replies are on a half scale, so they'd drag the mean ~9 points below every speaker average.
+    mean_score, stdev_score = core.mean_and_stdev(
+        [s.final_score for s in scores if s.position != SpeakerPosition.REPLY]
+    )
     content_scores = [s.content for s in scores if s.content is not None]
     style_scores = [s.style for s in scores if s.style is not None]
     strategy_scores = [s.strategy for s in scores if s.strategy is not None]
@@ -384,29 +391,44 @@ def motion_stats(session: Session, tournament_id: int) -> list[MotionStat]:
     if not motions:
         return []
 
+    # Two grouped queries for the whole tournament, not two per round.
+    winners = session.exec(
+        select(Debate.round_id, Debate.winner, func.count())
+        .join(Round, Debate.round_id == Round.id)
+        .where(Round.tournament_id == tournament_id)
+        .group_by(Debate.round_id, Debate.winner)
+    ).all()
+    wins: dict[int, dict[Side, int]] = defaultdict(lambda: {Side.PROP: 0, Side.OPP: 0})
+    for round_id, winner, count in winners:
+        if winner is not None:
+            wins[round_id][winner] += count
+
+    speaks = session.exec(
+        select(Debate.round_id, SpeakerScore.side, func.sum(SpeakerScore.final_score), func.count())
+        .select_from(SpeakerScore)
+        .join(Ballot, SpeakerScore.ballot_id == Ballot.id)
+        .join(Debate, Ballot.debate_id == Debate.id)
+        .join(Round, Debate.round_id == Round.id)
+        .where(
+            Round.tournament_id == tournament_id,
+            Ballot.discarded == False,  # noqa: E712
+            Ballot.forfeit == False,  # noqa: E712
+        )
+        .group_by(Debate.round_id, SpeakerScore.side)
+    ).all()
+    speak_by_round: dict[int, dict[Side, tuple[float, int]]] = defaultdict(dict)
+    for round_id, side, total, count in speaks:
+        speak_by_round[round_id][side] = (float(total), count)
+
+    def average(round_id: int, side: Side) -> float | None:
+        entry = speak_by_round.get(round_id, {}).get(side)
+        return round(entry[0] / entry[1], 4) if entry and entry[1] else None
+
     results = []
     for motion, round_ in motions:
-        debates = session.exec(select(Debate).where(Debate.round_id == round_.id)).all()
-        prop_wins = sum(1 for d in debates if d.winner == Side.PROP)
-        opp_wins = sum(1 for d in debates if d.winner == Side.OPP)
+        prop_wins = wins[round_.id][Side.PROP] if round_.id in wins else 0
+        opp_wins = wins[round_.id][Side.OPP] if round_.id in wins else 0
         decided = prop_wins + opp_wins
-
-        debate_ids = [d.id for d in debates]
-        prop_scores: list[float] = []
-        opp_scores: list[float] = []
-        if debate_ids:
-            score_rows = session.exec(
-                select(SpeakerScore.side, SpeakerScore.final_score)
-                .join(Ballot, SpeakerScore.ballot_id == Ballot.id)
-                .where(
-                    Ballot.debate_id.in_(debate_ids),
-                    Ballot.discarded == False,  # noqa: E712
-                    Ballot.forfeit == False,  # noqa: E712
-                )
-            ).all()
-            for side, final_score in score_rows:
-                (prop_scores if side == Side.PROP else opp_scores).append(final_score)
-
         results.append(
             MotionStat(
                 motion_id=motion.id,
@@ -416,12 +438,8 @@ def motion_stats(session: Session, tournament_id: int) -> list[MotionStat]:
                 prop_wins=prop_wins,
                 opp_wins=opp_wins,
                 prop_win_rate=round(prop_wins / decided * 100, 4) if decided else None,
-                average_prop_speaks=round(sum(prop_scores) / len(prop_scores), 4)
-                if prop_scores
-                else None,
-                average_opp_speaks=round(sum(opp_scores) / len(opp_scores), 4)
-                if opp_scores
-                else None,
+                average_prop_speaks=average(round_.id, Side.PROP),
+                average_opp_speaks=average(round_.id, Side.OPP),
             )
         )
     results.sort(key=lambda m: m.round_seq)

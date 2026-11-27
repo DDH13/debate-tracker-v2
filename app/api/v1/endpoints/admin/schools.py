@@ -27,6 +27,7 @@ from app.models import (
     User,
 )
 from app.models.membership import YEAR_MAX, YEAR_MIN
+from app.services import merge
 from app.services import schools as school_service
 
 router = APIRouter()
@@ -54,6 +55,17 @@ def get_school(
 
 
 router.include_router(views)
+
+# The institution merge screen's list; moved out of the public /institutions router.
+institution_views = APIRouter(prefix="/institutions", tags=["admin: schools"])
+
+
+@institution_views.get("/merge-info", response_model=list[merge.InstitutionMergeInfo])
+def institution_merge_info(session: SessionDep) -> list[merge.InstitutionMergeInfo]:
+    return merge.institution_merge_info(session)
+
+
+router.include_router(institution_views)
 
 # --- Memberships ---------------------------------------------------------------------
 

@@ -20,7 +20,7 @@ class Round(RoundBase, table=True):
     __table_args__ = (UniqueConstraint("tournament_id", "seq"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    tournament_id: int = Field(foreign_key="tournament.id")
+    tournament_id: int = Field(foreign_key="tournament.id", index=True)
 
     tournament: "Tournament" = Relationship(back_populates="rounds")
     motion: "Motion" = Relationship(
