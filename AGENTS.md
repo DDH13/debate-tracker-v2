@@ -8,7 +8,7 @@ in-memory SQLite (`sqlite://`) if unset.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements-dev.txt
 make dev
 # http://localhost:8000/docs, /health
 ```
@@ -24,6 +24,22 @@ an unhandled exception under concurrent load), it doesn't notice, and the listen
 socket stays open with nothing behind it, so new requests hang forever. gunicorn's
 arbiter monitors and respawns crashed workers regardless of cause, and `-w 2` keeps one
 worker's crash from taking down the whole listener while it respawns.
+
+Production runs `make prod` (or the `Dockerfile`): same gunicorn, no `--reload`. Deployment,
+env vars and the two UI topologies are in `docs/deployment.md`. `ENVIRONMENT=production`
+makes `Settings` refuse SQLite, `CORS_ORIGINS=["*"]` and `SEED_ON_STARTUP`, forces a `Secure`
+cookie and turns `/docs` + `/openapi.json` off (`docs_enabled`). Dependencies are pinned in
+`requirements.txt` (runtime) and `requirements-dev.txt` (+ pytest, respx).
+
+Hardening that lives in `app/main.py`: credentialed CORS only with an explicit
+`CORS_ORIGINS` list; `cross_site_write_guard` 403s any POST/PUT/PATCH/DELETE whose
+`Origin`/`Referer` is not the API's host, `X-Forwarded-Host` or a listed origin (off while the
+list is `*`; requests with neither header pass); `/health` does a `SELECT 1` (503 when it
+fails); the lifespan's schema work runs under `startup_lock()` (a Postgres advisory lock) and
+purges expired sessions. `POST /auth/login` is throttled per email and per IP
+(`app/services/login_throttle.py`, in-process; `conftest.py` resets it per test) and passwords
+are capped at `MAX_PASSWORD_LENGTH`. List endpoints bound `offset` (`ge=0`) and `limit`
+(`ge=1`): a new one should too. `tests/test_production.py` covers all of this.
 
 `app/db/session.py` only uses `StaticPool` + `check_same_thread=False` for the
 in-memory `sqlite://` case (required there since every connection must share the one
