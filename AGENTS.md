@@ -139,12 +139,39 @@ is covered automatically, and a new public write must be added there deliberatel
     kind?, upstream_url?, candidates, suggested}`. `blocking` (already imported, BP-only,
     override target gone) makes a real import roll back and raise `ImportBlocked` (422 on
     `/tournaments/import`); `decision` is a school with no exact key match but a fuzzy one
-    (`school_similar`, `similar_institutions` >= 0.85, top suggested at >= 0.93) or a new person
-    with a namesake elsewhere (`person_namesake`, suggested "new"); `warning` is everything
+    (`school_similar`, see below) or a new person with a namesake (`person_namesake`) or whose
+    email belongs to someone with another name (`email_other_name`); `warning` is everything
     `_skip` records plus team size / no adjudicator / rounds without results / similar
     tournament name; `info` summarises matches. New skip sites call `_skip(report, msg, code)`;
     new checks that shouldn't land in the legacy `skipped` list call `_issue`.
+  - **Matching rule: a wrong match is far worse than a missed one** (there's no un-merge; a
+    missed match is just a merge later). A silent match or a preselected suggestion needs strong
+    evidence; when unsure, create new and leave a decision showing the candidates.
+  - **Schools**: auto-match is `institution_key` equality only. Candidates: Jaro-Winkler >= 0.85,
+    containment, or the same `school_tokens` (generic words like the / of / school / college
+    dropped, `S.`/`Saint` -> `st`). A score never suggests anything (Nalanda / Ananda score
+    0.95): `_suggest_school` uses `school_relation` — `same` words up to spelling (exactly one
+    such school) is suggested, `subset` (extra words only at the end: "Hillwood College" vs
+    "... Kandy") leaves it to a human, `different` (branches: "Gateway College Negombo" vs
+    "... Dehiwala"; or extra words in front: "Ladies' College" vs "Muslim Ladies' College")
+    suggests "new".
+    Upstream institutions named Swing / Composite / Mixed / Independent aren't schools: their
+    teams and new speakers get no school (`composite_school` info).
+  - **People** (`_upsert_person`): only a strong name (`_strong_name`: two words longer than an
+    initial) is matched or suggested by name; "Akindu" or "K. Perera" with a namesake is always
+    suggested "new". Both sides giving a different email or gender rules a namesake out of
+    matching / suggesting. Email matches need `_names_compatible` names; an unknown email still
+    falls through to name + school. **Judges represent different schools at different
+    tournaments**, so a judge with a strong name and exactly one eligible namesake anywhere is
+    linked with no decision (`how="name"`, `judge_other_school` info; their `institution_id` is
+    left alone); several copies raise a decision suggesting the one with the most panels. Each
+    adjudicator is listed once per tournament, so two of one name stay two judges
+    (`same_name_twice`, via `claimed`). Debaters do dedupe within a run by email / name +
+    school (reserves are listed on two teams). A debater namesake at another school who
+    debated within `DEBATER_RECENT_DAYS` gets no suggestion (may have switched schools); an
+    older one is suggested "new".
   - `ImportOverrides` (upstream URL -> local id or `"new"`, per kind) applies the decisions.
+    `tournament_date` is used for `tournament.date` only when no round has `starts_at`.
     An id override wins over every match; `"new"` only rules out the fuzzy candidates /
     namesakes, so exact key / email / name + school matches still apply (`Institution.name`
     is unique, and a school made by an earlier tournament in the batch must be reused).

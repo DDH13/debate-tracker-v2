@@ -84,6 +84,30 @@ def institution_key(name: str | None) -> str:
     return _NON_ALNUM_RE.sub("", normalize_text(name).lower())
 
 
+_SCHOOL_GENERIC = {"the", "of", "in", "at", "and", "school", "college"}
+_SCHOOL_ALIASES = {"s": "st", "saint": "st", "mt": "mount"}
+_SCHOOL_SPLIT_RE = re.compile(r"[^a-z0-9]+")
+
+
+def school_tokens(name: str | None) -> list[str]:
+    """The words that tell schools apart: lowercased, apostrophes dropped, `s`/`saint` -> `st`,
+    `mt` -> `mount`, and generic words (`the`, `of`, `school`, `college`, ...) removed. So
+    "The British School in Colombo" and "British School of Colombo" are both
+    `["british", "colombo"]`, and "S. Thomas' College" is `["st", "thomas"]`. Typos of "school"
+    and "college" are dropped too."""
+    text = normalize_text(name).lower().replace("'", "")
+    tokens = (_SCHOOL_ALIASES.get(w, w) for w in _SCHOOL_SPLIT_RE.split(text) if w)
+    return [t for t in tokens if t not in _SCHOOL_GENERIC and not _misspelt_generic(t)]
+
+
+def _misspelt_generic(word: str) -> bool:
+    """"colege", "scool": a typo of a generic word is just as generic."""
+    return len(word) >= 5 and any(
+        word[0] == g[0] and abs(len(word) - len(g)) <= 1 and jaro_winkler(word, g) >= 0.92
+        for g in ("school", "college")
+    )
+
+
 def jaro_winkler(a: str, b: str) -> float:
     """Jaro-Winkler similarity in [0, 1] with the standard 0.1 prefix scale and 4-char
     prefix cap, matching Apache Commons Text."""

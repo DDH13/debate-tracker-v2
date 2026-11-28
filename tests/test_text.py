@@ -2,12 +2,13 @@ import pytest
 from sqlmodel import Session
 
 from app.models import Institution
-from app.services.institutions import find_matching_institution, similar_institutions
+from app.services.institutions import find_matching_institution, school_relation, similar_institutions
 from app.services.text import (
     institution_key,
     jaro_winkler,
     name_key,
     normalize_text,
+    school_tokens,
     split_name,
     tidy_case,
 )
@@ -141,3 +142,40 @@ def test_similar_institutions_ranks_and_thresholds(session: Session) -> None:
     # Below the score threshold, but both "Royal ..." names contain the query.
     assert {r.id for r in loose} == {royal.id, royal_inst.id}
     assert loose == sorted(loose, key=lambda r: (-r.score, r.name))
+
+
+@pytest.mark.parametrize(
+    ("name", "tokens"),
+    [
+        ("The British School in Colombo", ["british", "colombo"]),
+        ("British School of Colombo", ["british", "colombo"]),
+        ("S. Thomas' College Mt. Lavinia", ["st", "thomas", "mount", "lavinia"]),
+        ("Royal Colege", ["royal"]),
+        ("Collegiate School", ["collegiate"]),
+        ("St. Peter's College Colombo 4", ["st", "peters", "colombo", "4"]),
+    ],
+)
+def test_school_tokens(name: str, tokens: list[str]) -> None:
+    assert school_tokens(name) == tokens
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "relation"),
+    [
+        ("Gateway College Negombo", "Gateway College Dehiwala", "different"),
+        ("Nalanda College", "Ananda College", "different"),
+        ("Nalanda College Colombo 10", "Nalanda College Colombo 4", "different"),
+        ("St. Joseph's College", "St. Peter's College", "different"),
+        ("Hillwood College", "Hillwood College Kandy", "subset"),
+        ("Ladies' College", "Muslim Ladies' College", "different"),
+        ("St. Thomas College Colombo", "St. Thomas Boys College Colombo", "different"),
+        ("Nalanda College", "Nalanda College Colombo 10", "subset"),
+        ("British School of Colombo", "The British School in Colombo", "same"),
+        ("S. Thomas' College", "St Thomas' College", "same"),
+        ("Visakha Vidyalaya", "Vishaka Vidyalaya", "same"),
+        ("Royal Colege Colombo", "Royal College Colombo", "same"),
+    ],
+)
+def test_school_relation(a: str, b: str, relation: str) -> None:
+    assert school_relation(a, b) == relation
+    assert school_relation(b, a) == relation

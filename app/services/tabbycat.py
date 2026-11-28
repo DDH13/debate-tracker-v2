@@ -8,10 +8,11 @@ rather than aborting the whole import; every skip is recorded on ``ImportReport.
 import hashlib
 import json
 import logging
+import re
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal, NamedTuple
 
@@ -39,7 +40,7 @@ from app.models import (
     TeamMember,
     Tournament,
 )
-from app.services.institutions import find_matching_institution, similar_institutions
+from app.services.institutions import find_matching_institution, school_relation, similar_institutions
 from app.services.text import institution_key, jaro_winkler, name_key, normalize_text, split_name, tidy_case
 
 logger = logging.getLogger(__name__)
@@ -47,12 +48,15 @@ logger = logging.getLogger(__name__)
 _GENDER_MAP = {"M": "male", "F": "female", "O": "other"}
 
 # A school with no exact key match is offered for review when a fuzzy match scores at least
-# this; the top candidate is suggested when it scores at least SCHOOL_SUGGEST_SCORE.
+# this (or shares its distinguishing words). Suggestions never come from this score: see
+# `_suggest_school`.
 SCHOOL_SIMILAR_SCORE = 0.85
-SCHOOL_SUGGEST_SCORE = 0.93
-# Two different candidates scoring within this of each other are a tie: no suggestion.
-SCHOOL_TIE_MARGIN = 0.01
+# Upstream "institutions" that stand for a mixed team rather than a school.
+_COMPOSITE_SCHOOL_RE = re.compile(r"^\s*(swing|composite|mixed|independent)\b", re.IGNORECASE)
 TOURNAMENT_SIMILAR_SCORE = 0.95
+# A debater namesake at another school who debated within this many days may have switched
+# schools, so the check leaves the choice to a human instead of suggesting "new".
+DEBATER_RECENT_DAYS = 365
 
 _CRITERION_ALIASES = {
     "content": {"content", "matter"},
@@ -126,6 +130,8 @@ class ImportOverrides(BaseModel):
     institutions: dict[str, Choice] = {}
     debaters: dict[str, Choice] = {}
     judges: dict[str, Choice] = {}
+    # Used for `tournament.date` when no round has a start time upstream.
+    tournament_date: date | None = None
 
     def for_kind(self, kind: str) -> dict[str, Choice]:
         return {"institution": self.institutions, "debater": self.debaters, "judge": self.judges}[kind]
@@ -141,7 +147,7 @@ class Resolution(BaseModel):
     upstream_name: str
     local_id: int
     local_name: str
-    how: str  # "created" | "email" | "name+institution" | "institution-key" | "override"
+    how: str  # "created" | "email" | "name+institution" | "name" | "institution-key" | "override"
 
 
 class ImportReport(BaseModel):
@@ -335,14 +341,16 @@ def _round_seq_from_url(round_url: str) -> int | None:
 class _PersonResolution(NamedTuple):
     person: object
     created: bool
-    how: str  # "created" | "cache-email" | "cache-name" | "db-email" | "db-name"
+    how: str  # "created" | "cache-email" | "cache-name" | "db-email" | "db-name" | "name-any" | "override" | "suggested"
     key: tuple
 
 
 def _resolution_how(how: str) -> str:
     if how == "created":
         return "created"
-    return "email" if how.endswith("email") else "name+institution"
+    if how.endswith("email"):
+        return "email"
+    return "name" if how == "name-any" else "name+institution"
 
 
 def _person_label(person) -> str:
@@ -359,20 +367,31 @@ def _derive_names(name: str, last_name: str | None) -> tuple[str | None, str | N
     return split_name(name)
 
 
-def _suggest_school(similar: list) -> Choice | None:
-    """The fuzzy candidate to suggest, "new", or None when two different schools tie (say
-    branches of one chain: the upstream name doesn't say which)."""
-    if not similar:
-        return "new"
-    top = similar[0]
-    if top.score < SCHOOL_SUGGEST_SCORE:
-        return "new"
-    rivals = [
-        c
-        for c in similar[1:]
-        if top.score - c.score < SCHOOL_TIE_MARGIN and institution_key(c.name) != institution_key(top.name)
-    ]
-    return None if rivals else top.id
+_RELATION_ORDER = {"same": 0, "subset": 1, "different": 2}
+
+
+def _rank_schools(name: str, similar: list) -> list:
+    """Candidates with the same distinguishing words first, then the subset ones, then by score."""
+    return sorted(similar, key=lambda c: (_RELATION_ORDER[school_relation(name, c.name)], -c.score))
+
+
+def _suggest_school(name: str, similar: list) -> Choice | None:
+    """The candidate to suggest, "new", or None for a human to pick.
+
+    A wrong school match is hard to undo while a missed one is a merge, so a similarity score
+    never suggests anything (Nalanda / Ananda score 0.95). A candidate is suggested only when
+    its distinguishing words are the same up to spelling (`school_relation` "same"), and only if
+    exactly one school is like that. When a name is the other plus extra words ("Hillwood
+    College" / "Hillwood College Kandy"), the upstream may have left out the branch, so a human
+    picks. When every candidate has words this one lacks and vice versa (branches: "Gateway
+    College Negombo" / "Gateway College Dehiwala"), it's a new school."""
+    relations = {c.id: school_relation(name, c.name) for c in similar}
+    same = [c for c in similar if relations[c.id] == "same"]
+    if same:
+        return same[0].id if len({institution_key(c.name) for c in same}) == 1 else None
+    if any(r == "subset" for r in relations.values()):
+        return None
+    return "new"
 
 
 def _school_issue(report: ImportReport, inst: dict, similar: list, suggestion: Choice | None) -> None:
@@ -390,21 +409,85 @@ def _school_issue(report: ImportReport, inst: dict, similar: list, suggestion: C
     )
 
 
-def _suggest_person(namesakes: list, institution_id: int | None, kind: str) -> Choice | None:
-    """The namesake to suggest, "new", or None when it's for a human to pick.
+def _suggest_person(
+    namesakes: list,
+    institution_id: int | None,
+    kind: str,
+    *,
+    activity: dict[int, int] | None = None,
+    recent: set[int] | frozenset[int] = frozenset(),
+) -> Choice | None:
+    """The namesake to suggest, "new", or None when it's for a human to pick. `namesakes` are
+    only the eligible ones: strong name, no conflicting email or gender, not taken this run.
 
-    A debater is only suggested when the namesake has no school or the same one (earlier
-    imports often left teams without a school, so many existing debaters have none). Judges
-    move between schools, so any single namesake is suggested. Several plausible namesakes
-    (already duplicates here) get no suggestion."""
-    plausible = (
-        namesakes
-        if kind == "judge"
-        else [n for n in namesakes if n.institution_id is None or n.institution_id == institution_id]
-    )
-    if not plausible:
+    Judges judge for different schools at different tournaments, so school is ignored: a
+    single namesake is the same judge, and of several (duplicates already) the one with the
+    most panels in `activity` is suggested (ties: the oldest row).
+
+    A debater is suggested when the namesake has no school or the same one (earlier imports
+    often left teams without a school, so many existing debaters have none). A namesake at
+    another school who debated recently (`recent`) may have switched schools, so a human
+    picks; otherwise a namesake elsewhere is someone else ("new"). Several plausible
+    namesakes (already duplicates here) get no suggestion."""
+    if kind == "judge":
+        if not namesakes:
+            return "new"
+        counts = activity or {}
+        return max(namesakes, key=lambda n: (counts.get(n.id, 0), -n.id)).id
+    home = [n for n in namesakes if n.institution_id is None or n.institution_id == institution_id]
+    if any(n.id in recent for n in namesakes if n not in home):
+        return None
+    if not home:
         return "new"
-    return plausible[0].id if len(plausible) == 1 else None
+    return home[0].id if len(home) == 1 else None
+
+
+def _judge_activity(session: Session, judge_ids: list[int]) -> dict[int, int]:
+    """Panels sat per judge, for choosing between existing duplicates."""
+    return dict(
+        session.exec(
+            select(DebateJudge.judge_id, func.count())
+            .where(DebateJudge.judge_id.in_(judge_ids))
+            .group_by(DebateJudge.judge_id)
+        ).all()
+    )
+
+
+def _recent_debaters(session: Session, debater_ids: list[int]) -> set[int]:
+    """Debaters whose latest dated tournament is within DEBATER_RECENT_DAYS of today."""
+    cutoff = date.today() - timedelta(days=DEBATER_RECENT_DAYS)
+    rows = session.exec(
+        select(TeamMember.debater_id, func.max(Tournament.date))
+        .join(Team, Team.id == TeamMember.team_id)
+        .join(Tournament, Tournament.id == Team.tournament_id)
+        .where(TeamMember.debater_id.in_(debater_ids))
+        .group_by(TeamMember.debater_id)
+    ).all()
+    return {debater_id for debater_id, latest in rows if latest is not None and latest >= cutoff}
+
+
+def _strong_name(name: str) -> bool:
+    """At least two words longer than an initial. A first name alone ("Akindu") or an initial
+    and a surname ("K. Perera") is too common to match on: such people are only ever suggested
+    as "new", with the namesakes listed for a human to link."""
+    return sum(len(word) > 1 for word in re.split(r"[\s.]+", name) if word) >= 2
+
+
+def _conflicts(person, email: str | None, gender: str | None) -> bool:
+    """Both sides give an email, or both a gender, and they differ: not the same person by name."""
+    if email and person.email and person.email.strip().lower() != email.lower():
+        return True
+    mapped = _GENDER_MAP.get(gender) if gender else None
+    return bool(mapped and person.gender and person.gender != mapped)
+
+
+def _names_compatible(a: str, b: str) -> bool:
+    """For an email match: the same name, or the same surname and first initial ("Kamal
+    Perera" / "K. Perera"). A shared school or coach email under someone else's name isn't."""
+    left, right = name_key(a).replace(".", " ").split(), name_key(b).replace(".", " ").split()
+    if not left or not right:
+        return False
+    return left == right or (left[-1] == right[-1] and left[0][0] == right[0][0])
 
 
 def _namesake_issue(
@@ -418,6 +501,8 @@ def _namesake_issue(
     namesakes: list,
     suggestion: Choice | None,
     preview: bool = False,
+    code: str = "person_namesake",
+    reason: str = "possible duplicate of",
 ) -> None:
     institution_names = {
         i.id: i.name
@@ -427,12 +512,12 @@ def _namesake_issue(
     }
     others = ", ".join(f"#{n.id} ({institution_names.get(n.institution_id, 'none')})" for n in namesakes)
     verb = "matched by name" if isinstance(suggestion, int) and preview else "created"
-    message = f"{model.__name__} {name!r} {verb}; possible duplicate of {others}"
+    message = f"{model.__name__} {name!r} {verb}; {reason} {others}"
     report.skipped.append(message)
     _issue(
         report,
         "decision",
-        "person_namesake",
+        code,
         message,
         kind=kind,
         upstream_url=source_url,
@@ -464,28 +549,56 @@ def _upsert_person(
     source_url: str | None = None,
     overrides: dict[str, Choice] | None = None,
     created_ids: set[int] | None = None,
+    claimed: dict[int, str | None] | None = None,
     preview: bool = False,
 ) -> _PersonResolution:
     """Resolve one upstream speaker/adjudicator to a local row.
 
-    Order: a human override for `source_url` (an id), then the per-import cache, then email,
-    then name + institution; otherwise create. An override of "new" just means "none of the
-    namesakes", so it skips the namesake decision. A create where someone of the same
-    name already exists elsewhere is a `person_namesake` decision. `created_ids` holds the
-    rows this run created, which are never offered as candidates (a dry run rolls them back).
-    With `preview` (a dry run) a suggested namesake is used instead of creating someone, so
-    the report shows what the import does with the suggestions accepted.
+    A wrong match is hard to undo (no un-merge) while a missed one is a merge, so only strong
+    evidence matches silently:
+
+    1. A human override for `source_url` (an id).
+    2. The per-run cache. For a debater it's keyed by email, else name + school, so a speaker
+       listed on two teams of one school (reserves) is one debater. For a judge it's keyed by
+       the upstream URL: each adjudicator is listed once, so two of one name are two people.
+    3. Email, when the names are compatible (`_names_compatible`). An email held by someone
+       with another name is an `email_other_name` decision, suggested "new".
+    4. A strong name (`_strong_name`) at the same school, with no conflicting email / gender.
+    5. A judge with a strong name and exactly one namesake anywhere (judges represent different
+       schools at different tournaments), again with no conflict.
+
+    Otherwise a new row is created, and any namesakes become a `person_namesake` decision.
+    Weak names and conflicting namesakes are never suggested. For judges, `claimed` maps each
+    local row this run resolved to the upstream URL it went to: a second adjudicator never takes
+    a claimed row (two judges of one name in one tournament stay apart, `same_name_twice`).
+    `created_ids` holds the rows this run created, never offered as candidates (a dry run rolls
+    them back). With `preview` (a dry run) a suggested namesake is used instead of creating
+    someone, so the report shows what the import does with the suggestions accepted. An
+    override of "new" rules out the namesakes but not steps 3-4.
     """
     upstream_name = (name or "").strip()
     name = tidy_case(normalize_text(name))
     last_name = normalize_text(last_name) or None
     email = email.strip() if email else None
-    key = ("email", email.lower()) if email else ("name", name_key(name), institution_id)
     kind = model.__name__.lower()
+    nkey = name_key(name)
+    strong = _strong_name(name)
+    if kind == "judge" and source_url:
+        key: tuple = ("url", source_url)
+    elif email:
+        key = ("email", email.lower())
+    else:
+        key = ("name", nkey, institution_id)
     created_ids = created_ids if created_ids is not None else set()
+    claimed = claimed if claimed is not None else {}
     choice = (overrides or {}).get(source_url) if source_url else None
 
+    def free(person) -> bool:
+        return kind != "judge" or claimed.get(person.id, source_url) == source_url
+
     def resolved(person, created: bool, how: str) -> _PersonResolution:
+        cache[key] = person
+        claimed.setdefault(person.id, source_url)
         report.resolutions.append(
             Resolution(
                 kind=kind,
@@ -500,7 +613,6 @@ def _upsert_person(
     if isinstance(choice, int):
         chosen = session.get(model, choice)
         if chosen is not None:
-            cache[key] = chosen
             logger.debug("%s %r resolved via override to id=%s (upstream %s)", model.__name__, name, choice, source_url)
             return resolved(chosen, False, "override")
         _issue(
@@ -513,54 +625,62 @@ def _upsert_person(
             upstream_name=upstream_name,
         )
 
-    # "new" only rules out the namesake candidates; the exact email / name + school match
-    # below still applies.
     cached = cache.get(key)
     if cached is not None:
-        how = "cache-email" if key[0] == "email" else "cache-name"
-        logger.debug(
-            "%s %r resolved via %s cache key=%r (upstream %s)", model.__name__, name, how, key, source_url
-        )
-        return resolved(cached, False, how)
+        logger.debug("%s %r resolved via cache key=%r", model.__name__, name, key)
+        return resolved(cached, False, "cache-email" if key[0] == "email" else "cache-name")
 
-    if key[0] == "email":
-        existing = session.exec(select(model).where(model.email == email)).first()
-    else:
-        existing = session.exec(
-            select(model).where(
-                func.lower(model.full_name) == key[1], model.institution_id == institution_id
-            )
-        ).first()
-    if existing is not None:
-        cache[key] = existing
-        how = "db-email" if key[0] == "email" else "db-name"
-        logger.debug(
-            "%s %r resolved via %s to existing id=%s key=%r (upstream %s)",
-            model.__name__,
-            name,
-            how,
-            existing.id,
-            key,
-            source_url,
-        )
-        return resolved(existing, False, how)
+    kept_apart: list = []  # matches already taken by another upstream record this run
+    email_holder = None
+    if email:
+        holder = session.exec(select(model).where(func.lower(model.email) == email.lower()).order_by(model.id)).first()
+        if holder is not None and not free(holder):
+            kept_apart.append(holder)
+        elif holder is not None and _names_compatible(_person_label(holder), name):
+            logger.debug("%s %r resolved via email to id=%s (upstream %s)", model.__name__, name, holder.id, source_url)
+            return resolved(holder, False, "db-email")
+        elif holder is not None and choice != "new":
+            email_holder = holder
+
+    if strong:
+        for existing in session.exec(
+            select(model)
+            .where(func.lower(model.full_name) == nkey, model.institution_id == institution_id)
+            .order_by(model.id)
+        ).all():
+            if not free(existing):
+                kept_apart.append(existing)
+            elif not _conflicts(existing, email, gender):
+                logger.debug(
+                    "%s %r resolved via name+school to id=%s (upstream %s)", model.__name__, name, existing.id, source_url
+                )
+                return resolved(existing, False, "db-name")
 
     namesakes = (
         []
         if choice == "new"
         else [
             n
-            for n in session.exec(
-                select(model).where(func.lower(model.full_name) == name_key(name)).order_by(model.id)
-            ).all()
+            for n in session.exec(select(model).where(func.lower(model.full_name) == nkey).order_by(model.id)).all()
             if n.id not in created_ids
         ]
     )
+    eligible = [n for n in namesakes if free(n) and not _conflicts(n, email, gender)] if strong else []
 
-    suggestion = _suggest_person(namesakes, institution_id, kind)
+    if kind == "judge" and len(namesakes) == 1 and eligible == namesakes:
+        logger.debug("Judge %r matched namesake id=%s at another school (upstream %s)", name, eligible[0].id, source_url)
+        return resolved(eligible[0], False, "name-any")
+
+    ids = [n.id for n in eligible]
+    if not namesakes:
+        suggestion: Choice | None = "new"
+    elif kind == "judge":
+        suggestion = _suggest_person(eligible, institution_id, kind, activity=_judge_activity(session, ids) if ids else {})
+    else:
+        recent = _recent_debaters(session, ids) if ids else set()
+        suggestion = _suggest_person(eligible, institution_id, kind, recent=recent)
     if preview and isinstance(suggestion, int):
         person = next(n for n in namesakes if n.id == suggestion)
-        cache[key] = person
         _namesake_issue(session, report, model, kind, name, upstream_name, source_url, namesakes, suggestion, preview)
         return resolved(person, False, "suggested")
 
@@ -577,11 +697,36 @@ def _upsert_person(
     session.add(person)
     session.flush()
     created_ids.add(person.id)
-    cache[key] = person
     logger.debug("%s %r created id=%s key=%r (upstream %s)", model.__name__, name, person.id, key, source_url)
 
+    if kept_apart:
+        _issue(
+            report,
+            "warning",
+            "same_name_twice",
+            f"Two adjudicators named {name!r} in this tournament were kept apart; merge them if they are one person",
+            kind=kind,
+            upstream_url=source_url,
+            upstream_name=upstream_name,
+        )
     if namesakes:
+        if email_holder is not None and all(n.id != email_holder.id for n in namesakes):
+            namesakes = [*namesakes, email_holder]
         _namesake_issue(session, report, model, kind, name, upstream_name, source_url, namesakes, suggestion)
+    elif email_holder is not None:
+        _namesake_issue(
+            session,
+            report,
+            model,
+            kind,
+            name,
+            upstream_name,
+            source_url,
+            [email_holder],
+            "new",
+            code="email_other_name",
+            reason="another person has the same email:",
+        )
     return resolved(person, True, "created")
 
 
@@ -844,15 +989,21 @@ def _run_import(
             f"Make sure this isn't the same tournament under another slug.",
         )
     created_ids: dict[str, set[int]] = {"institution": set(), "debater": set(), "judge": set()}
+    claimed: dict[str, dict[int, str | None]] = {"debater": {}, "judge": {}}
     logger.info("tournament local_id=%s name=%r abbr=%r", tournament.id, tournament.name, tournament.abbr)
 
     institution_by_url: dict[str, int] = {}
+    composite_urls: set[str] = set()
     institutions_fetched = 0
     institutions_matched = 0
     step("Fetching schools", 0, 0)
     for inst in client.get_list(client.url("/api/v1/institutions")):
         institutions_fetched += 1
         with _record_context(f"institution {inst.get('name')!r}", inst):
+            if _COMPOSITE_SCHOOL_RE.match(inst.get("name") or ""):
+                composite_urls.add(inst["url"])
+                logger.debug("institution %r is a swing/composite team, not a school", inst["name"])
+                continue
             choice = overrides.institutions.get(inst["url"])
             if isinstance(choice, int):
                 chosen = session.get(Institution, choice)
@@ -897,13 +1048,16 @@ def _run_import(
             similar = (
                 []
                 if choice is not None
-                else [
-                    c
-                    for c in similar_institutions(session, inst["name"], threshold=SCHOOL_SIMILAR_SCORE)
-                    if c.id not in created_ids["institution"]
-                ]
+                else _rank_schools(
+                    inst["name"],
+                    [
+                        c
+                        for c in similar_institutions(session, inst["name"], threshold=SCHOOL_SIMILAR_SCORE)
+                        if c.id not in created_ids["institution"]
+                    ],
+                )
             )
-            suggestion = _suggest_school(similar)
+            suggestion = _suggest_school(inst["name"], similar)
             if similar and preview and isinstance(suggestion, int):
                 chosen = session.get(Institution, suggestion)
                 institution_by_url[inst["url"]] = chosen.id
@@ -936,6 +1090,14 @@ def _run_import(
                 )
             )
             logger.debug("institution %r created id=%s code=%r", inst["name"], new_inst.id, inst.get("code"))
+    if composite_urls:
+        _issue(
+            report,
+            "info",
+            "composite_school",
+            f"{len(composite_urls)} swing/composite team listing(s) treated as no school, so their "
+            f"teams and new speakers get no school",
+        )
     logger.info(
         "institutions: %d fetched, %d created, %d matched by institution key",
         institutions_fetched,
@@ -950,7 +1112,6 @@ def _run_import(
     teams_no_institution_url = 0
     teams_institution_unresolved = 0
     debaters_reused = 0
-    degenerate_person_merges_teams = 0
     step("Fetching teams", 0, 0)
     teams_payload = client.get_list(client.url(f"/api/v1/tournaments/{slug}/teams"))
     for team_data in teams_payload:
@@ -959,7 +1120,9 @@ def _run_import(
         name = team_data.get("long_name") or team_data.get("short_name") or team_data.get("reference")
         with _record_context(f"team {name!r} (upstream {team_data.get('url')})", team_data):
             institution_url = team_data.get("institution")
-            if institution_url is None:
+            if institution_url in composite_urls:
+                institution_id = None
+            elif institution_url is None:
                 institution_id = None
                 teams_no_institution_url += 1
             else:
@@ -1004,6 +1167,7 @@ def _run_import(
                     source_url=speaker.get("url"),
                     overrides=overrides.debaters,
                     created_ids=created_ids["debater"],
+                    claimed=claimed["debater"],
                     preview=preview,
                 )
                 debater = res.person
@@ -1011,15 +1175,6 @@ def _run_import(
                     report.debaters += 1
                 else:
                     debaters_reused += 1
-                    if res.how == "db-name" and res.key[2] is None:
-                        logger.warning(
-                            "debater %r (upstream %s) matched pre-existing id=%s by exact name alone "
-                            "(no email, no institution) — possible cross-tournament merge",
-                            speaker.get("name"),
-                            speaker.get("url"),
-                            debater.id,
-                        )
-                        degenerate_person_merges_teams += 1
                 debater_by_url[speaker["url"]] = debater.id
 
                 if debater.id in seen_debaters:
@@ -1052,13 +1207,6 @@ def _run_import(
             f"payload (institution_id left NULL)",
             "team_no_institution",
         )
-    if degenerate_person_merges_teams:
-        _skip(
-            report,
-            f"{degenerate_person_merges_teams} debater(s) matched a pre-existing row by name alone "
-            f"(no email or institution) — possible cross-tournament identity merge",
-            "name_only_match",
-        )
     logger.info(
         "teams: %d created, %d debaters created, %d reused, %d teams with unresolved institution",
         report.teams,
@@ -1072,7 +1220,7 @@ def _run_import(
     adjs_fetched = 0
     adjs_no_institution = 0
     judges_reused = 0
-    degenerate_person_merges_adjs = 0
+    judges_other_school: list[str] = []
     step("Fetching adjudicators", 0, 0)
     adjs_payload = client.get_list(client.url(f"/api/v1/tournaments/{slug}/adjudicators"))
     for adj in adjs_payload:
@@ -1080,7 +1228,9 @@ def _run_import(
         step("Importing adjudicators", adjs_fetched, len(adjs_payload))
         with _record_context(f"adjudicator {adj.get('name')!r}", adj):
             institution_url = adj.get("institution")
-            if institution_url is None:
+            if institution_url in composite_urls:
+                institution_id = None
+            elif institution_url is None:
                 institution_id = None
                 adjs_no_institution += 1
             else:
@@ -1106,6 +1256,7 @@ def _run_import(
                 source_url=adj.get("url"),
                 overrides=overrides.judges,
                 created_ids=created_ids["judge"],
+                claimed=claimed["judge"],
                 preview=preview,
             )
             judge = res.person
@@ -1113,15 +1264,8 @@ def _run_import(
                 report.judges += 1
             else:
                 judges_reused += 1
-                if res.how == "db-name" and res.key[2] is None:
-                    logger.warning(
-                        "judge %r (upstream %s) matched pre-existing id=%s by exact name alone "
-                        "(no email, no institution) — possible cross-tournament merge",
-                        adj.get("name"),
-                        adj.get("url"),
-                        judge.id,
-                    )
-                    degenerate_person_merges_adjs += 1
+                if res.how == "name-any":
+                    judges_other_school.append(_person_label(judge))
             judge_by_url[adj["url"]] = judge.id
             logger.debug(
                 "adjudicator %r resolved to judge id=%s institution_id=%s", adj.get("name"), judge.id, institution_id
@@ -1134,12 +1278,13 @@ def _run_import(
             f"payload (institution_id left NULL)",
             "judge_no_institution",
         )
-    if degenerate_person_merges_adjs:
-        _skip(
+    if judges_other_school:
+        _issue(
             report,
-            f"{degenerate_person_merges_adjs} judge(s) matched a pre-existing row by name alone "
-            f"(no email or institution) — possible cross-tournament identity merge",
-            "name_only_match",
+            "info",
+            "judge_other_school",
+            f"{len(judges_other_school)} judge(s) matched an existing judge of the same name listed "
+            f"under another school: " + ", ".join(judges_other_school),
         )
     logger.info(
         "adjudicators: %d created, %d reused, %d with no institution",
@@ -1396,6 +1541,10 @@ def _run_import(
         tournament.date = min(starts_ats)
         session.add(tournament)
         logger.info("tournament.date set to %s from %d round start time(s)", tournament.date, len(starts_ats))
+    elif overrides.tournament_date is not None:
+        tournament.date = overrides.tournament_date
+        session.add(tournament)
+        _issue(report, "info", "date_by_hand", f"No round had a start time; date set by hand to {tournament.date}")
     else:
         _skip(report, "no round had starts_at; tournament.date left NULL", "missing_start")
 

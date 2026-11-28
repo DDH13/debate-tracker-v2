@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -12,7 +12,19 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models import Debater, ImportBatch, ImportJob, Institution, Team, TeamMember, Tournament
+from app.models import (
+    Debate,
+    DebateJudge,
+    Debater,
+    ImportBatch,
+    ImportJob,
+    Institution,
+    Judge,
+    Round,
+    Team,
+    TeamMember,
+    Tournament,
+)
 from app.services import imports as service
 from app.services.tabbycat import ImportBlocked, ImportOverrides, import_tournament
 from tests.test_tabbycat_import import BASE_URL, SLUG, register_routes, u
@@ -33,8 +45,31 @@ def _speaker(slug: str, id_: int, name: str) -> dict:
     }
 
 
-def register_simple(slug: str, *, school: str = "Royal Colege Colombo", speakers: list[str] | None = None) -> None:
-    """One school, two teams, one round with one two-team debate, no ballots."""
+def _adjudicator(slug: str, id_: int, judge: str | dict, institution_url: str | None) -> dict:
+    """`judge` is a name, or a dict with `name` and any fields to override (email, gender)."""
+    fields = judge if isinstance(judge, dict) else {"name": judge}
+    return {
+        "id": id_,
+        "url": u(f"/api/v1/tournaments/{slug}/adjudicators/{id_}"),
+        "last_name": fields["name"].split()[-1],
+        "institution": institution_url,
+        "email": None,
+        "phone": "",
+        "gender": None,
+        **fields,
+    }
+
+
+def register_simple(
+    slug: str,
+    *,
+    school: str = "Royal Colege Colombo",
+    speakers: list[str] | None = None,
+    judges: list[str | dict] | None = None,
+    starts_at: str | None = "2025-01-04T09:00:00Z",
+) -> None:
+    """One school, two teams, one round with one two-team debate, no ballots. `judges` are
+    adjudicators from that school (not on any panel)."""
     names = speakers or ["Kamal Perera", "Nimal Silva", "Sunil Fernando"]
     institution = {"id": 7, "url": u("/api/v1/institutions/7"), "name": school, "code": None}
     teams = []
@@ -60,8 +95,9 @@ def register_simple(slug: str, *, school: str = "Royal Colege Colombo", speakers
         "abbreviation": "R1",
         "stage": "P",
         "completed": True,
-        "starts_at": "2025-01-04T09:00:00Z",
+        "starts_at": starts_at,
     }
+    adjudicators = [_adjudicator(slug, i + 1, n, institution["url"]) for i, n in enumerate(judges or [])]
     pairing = {
         "id": 1,
         "teams": [{"team": teams[0]["url"], "side": "aff"}, {"team": teams[1]["url"], "side": "neg"}],
@@ -71,7 +107,10 @@ def register_simple(slug: str, *, school: str = "Royal Colege Colombo", speakers
     respx.get(u(f"/api/v1/tournaments/{slug}")).mock(return_value=httpx.Response(200, json=tournament))
     respx.get(u("/api/v1/institutions")).mock(return_value=httpx.Response(200, json=[institution]))
     respx.get(u(f"/api/v1/tournaments/{slug}/teams")).mock(return_value=httpx.Response(200, json=teams))
-    for path in ("adjudicators", "venues", "score-criteria", "motions"):
+    respx.get(u(f"/api/v1/tournaments/{slug}/adjudicators")).mock(
+        return_value=httpx.Response(200, json=adjudicators)
+    )
+    for path in ("venues", "score-criteria", "motions"):
         respx.get(u(f"/api/v1/tournaments/{slug}/{path}")).mock(return_value=httpx.Response(200, json=[]))
     respx.get(u(f"/api/v1/tournaments/{slug}/rounds")).mock(return_value=httpx.Response(200, json=[round_]))
     respx.get(u(f"/api/v1/tournaments/{slug}/rounds/1/pairings")).mock(
@@ -412,16 +451,298 @@ def test_person_suggestion_prefers_a_single_schoolless_or_same_school_namesake()
     assert _suggest_person([no_school, other], 7, "debater") == 1
     assert _suggest_person([no_school, same], 7, "debater") is None  # duplicates already: a human picks
     assert _suggest_person([other], 7, "judge") == 3  # judges move between schools
+    # A namesake elsewhere who debated recently may have switched schools: a human picks.
+    assert _suggest_person([other], 7, "debater", recent={3}) is None
+    assert _suggest_person([no_school, other], 7, "debater", recent={3}) is None
+    # Several judge copies: the busiest, ties to the oldest row.
+    assert _suggest_person([same, other], 7, "judge", activity={3: 5, 2: 1}) == 3
+    assert _suggest_person([other, same], 7, "judge", activity={}) == 2
 
 
-def test_school_suggestion_is_left_open_when_two_different_schools_tie() -> None:
+def _judge_with_panels(session: Session, name: str, school: Institution, panels: int) -> Judge:
+    judge = Judge(full_name=name, institution_id=school.id)
+    session.add(judge)
+    session.flush()
+    if panels:
+        tournament = Tournament(name=f"Old {name} {school.id}", slug=f"old-{judge.id}")
+        session.add(tournament)
+        session.flush()
+        round_ = Round(tournament_id=tournament.id, seq=1, name="R1")
+        prop, opp = Team(tournament_id=tournament.id, name="P"), Team(tournament_id=tournament.id, name="O")
+        session.add_all([round_, prop, opp])
+        session.flush()
+        for _ in range(panels):
+            debate = Debate(round_id=round_.id, prop_team_id=prop.id, opp_team_id=opp.id)
+            session.add(debate)
+            session.flush()
+            session.add(DebateJudge(debate_id=debate.id, judge_id=judge.id))
+    return judge
+
+
+def test_judge_at_another_school_is_linked_without_a_decision(client: TestClient, session: Session) -> None:
+    home = Institution(name="Royal College Colombo")
+    elsewhere = Institution(name="Visakha Vidyalaya")
+    session.add_all([home, elsewhere])
+    session.flush()
+    judge = _judge_with_panels(session, "Thithira Jayakody", elsewhere, 0)
+    session.commit()
+
+    with respx.mock:
+        register_simple("open", school="Royal College Colombo", judges=["Thithira Jayakody"])
+        batch = _create(client, "open")
+    job = batch["jobs"][0]
+    assert job["status"] == "ready", job["error"]
+    assert not _issues(job, "person_namesake")
+    [info] = _issues(job, "judge_other_school")
+    assert info["severity"] == "info" and "Thithira Jayakody" in info["message"]
+    [res] = [r for r in job["report"]["resolutions"] if r["kind"] == "judge"]
+    assert res["local_id"] == judge.id and res["how"] == "name"
+
+    with respx.mock:
+        run = client.post(f"{IMPORTS}/{batch['id']}/run", json={"job_ids": [job["id"]]})
+    assert run.json()["jobs"][0]["status"] == "imported"
+    session.expire_all()
+    judges = session.exec(select(Judge)).all()
+    assert [j.id for j in judges] == [judge.id]
+    assert judges[0].institution_id == elsewhere.id  # matching only: the school is left alone
+
+
+def test_judge_duplicates_suggest_the_busiest_and_a_same_school_copy_wins(
+    client: TestClient, session: Session
+) -> None:
+    home = Institution(name="Royal College Colombo")
+    a, b = Institution(name="Gateway College Colombo"), Institution(name="Visakha Vidyalaya")
+    session.add_all([home, a, b])
+    session.flush()
+    _judge_with_panels(session, "Thithira Jayakody", a, 1)
+    busy = _judge_with_panels(session, "Thithira Jayakody", b, 3)
+    session.commit()
+
+    with respx.mock:
+        register_simple("open", school="Royal College Colombo", judges=["Thithira Jayakody"])
+        job = _create(client, "open")["jobs"][0]
+    [namesake] = _issues(job, "person_namesake")
+    assert namesake["kind"] == "judge" and namesake["suggested"] == busy.id
+
+    same = _judge_with_panels(session, "Thithira Jayakody", home, 0)
+    session.commit()
+    with respx.mock:
+        register_simple("again", school="Royal College Colombo", judges=["Thithira Jayakody"])
+        job = _create(client, "again")["jobs"][0]
+    assert not _issues(job, "person_namesake")
+    [res] = [r for r in job["report"]["resolutions"] if r["kind"] == "judge"]
+    assert res["local_id"] == same.id and res["how"] == "name+institution"
+
+
+def test_debater_namesake_elsewhere_who_debated_recently_is_left_to_a_human(
+    client: TestClient, session: Session
+) -> None:
+    home, other = Institution(name="Royal College Colombo"), Institution(name="Somewhere Else")
+    session.add_all([home, other])
+    session.flush()
+    debater = Debater(full_name="Kamal Perera", institution_id=other.id)
+    recent = Tournament(name="Recent", slug="recent", date=date.today() - timedelta(days=60))
+    session.add_all([debater, recent])
+    session.flush()
+    team = Team(tournament_id=recent.id, name="Else A", institution_id=other.id)
+    session.add(team)
+    session.flush()
+    session.add(TeamMember(team_id=team.id, debater_id=debater.id))
+    session.commit()
+
+    with respx.mock:
+        register_simple("open", school="Royal College Colombo")
+        job = _create(client, "open")["jobs"][0]
+    [namesake] = _issues(job, "person_namesake")
+    assert namesake["suggested"] is None
+    assert job["undecided"] == 1
+
+    recent.date = date.today() - timedelta(days=800)
+    session.add(recent)
+    session.commit()
+    with respx.mock:
+        register_simple("later", school="Royal College Colombo")
+        job = _create(client, "later")["jobs"][0]
+    [namesake] = _issues(job, "person_namesake")
+    assert namesake["suggested"] == "new"
+
+
+def test_tournament_date_entered_by_hand_when_rounds_have_no_start(client: TestClient, session: Session) -> None:
+    session.add(Institution(name="Royal College Colombo"))
+    session.commit()
+    with respx.mock:
+        register_simple("open", school="Royal College Colombo", starts_at=None)
+        batch = _create(client, "open")
+    job = batch["jobs"][0]
+    assert _issues(job, "missing_start")
+
+    url = f"{IMPORTS}/jobs/{job['id']}/decisions"
+    saved = client.put(url, json={"tournament_date": "2025-03-01"})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["decisions"]["tournament_date"] == "2025-03-01"
+    # Saving other decisions keeps the date; an explicit null clears it.
+    assert client.put(url, json={}).json()["decisions"]["tournament_date"] == "2025-03-01"
+    assert client.put(url, json={"tournament_date": None}).json()["decisions"]["tournament_date"] is None
+    client.put(url, json={"tournament_date": "2025-03-02"})
+
+    with respx.mock:
+        run = client.post(f"{IMPORTS}/{batch['id']}/run", json={"job_ids": [job["id"]]})
+    done = run.json()["jobs"][0]
+    assert done["status"] == "imported", done["error"]
+    assert session.get(Tournament, done["tournament_id"]).date == date(2025, 3, 2)
+
+
+def test_round_start_times_win_over_a_hand_entered_date(session: Session) -> None:
+    session.add(Institution(name="Royal College Colombo"))
+    session.commit()
+    with respx.mock:
+        register_simple("open", school="Royal College Colombo")
+        report = import_tournament(
+            BASE_URL, "open", session=session, overrides=ImportOverrides(tournament_date=date(2030, 1, 1))
+        )
+    assert session.get(Tournament, report.tournament_id).date == date(2025, 1, 4)
+    assert not [i for i in report.issues if i.code == "date_by_hand"]
+
+
+def test_school_suggestion_needs_the_same_distinguishing_words() -> None:
     from types import SimpleNamespace as C
 
     from app.services.tabbycat import _suggest_school
 
-    gampaha = C(id=1, name="Lyceum International School Gampaha", score=0.954)
-    wattala = C(id=2, name="Lyceum International School Wattala", score=0.954)
-    assert _suggest_school([gampaha, wattala]) is None
-    moir, moir_dup = C(id=3, name="Elizabeth Moir School", score=0.933), C(id=4, name="Elizabeth Moir school", score=0.933)
-    assert _suggest_school([moir, moir_dup]) == 3  # same name twice is one school
-    assert _suggest_school([C(id=5, name="Nalanda College", score=0.915)]) == "new"
+    def school(id_: int, name: str) -> C:
+        return C(id=id_, name=name, score=0.95)
+
+    # Branches of one chain are different schools, whatever the similarity score.
+    colombo, dehiwala = school(1, "Gateway College Colombo"), school(2, "Gateway College Dehiwala")
+    assert _suggest_school("Gateway College Negombo", [colombo, dehiwala]) == "new"
+    # Nalanda / Ananda score 0.95 but are different schools.
+    assert _suggest_school("Ananda College", [school(3, "Nalanda College")]) == "new"
+    # Spelling and filler words only: suggested.
+    assert _suggest_school("Royal Colege Colombo", [school(4, "Royal College Colombo")]) == 4
+    assert _suggest_school("British School of Colombo", [school(5, "The British School in Colombo")]) == 5
+    assert _suggest_school("S. Thomas' College", [school(6, "St Thomas' College")]) == 6
+    assert _suggest_school("Vishaka Vidyalaya", [school(7, "Visakha Vidyalaya")]) == 7
+    # The upstream name may leave out the branch: a human picks.
+    assert _suggest_school("Hillwood College", [school(8, "Hillwood College Kandy")]) is None
+    # Extra words in front name another school.
+    assert _suggest_school("Ladies' College", [school(14, "Muslim Ladies' College")]) == "new"
+    gampaha, wattala = school(9, "Lyceum International School Gampaha"), school(10, "Lyceum International School Wattala")
+    assert _suggest_school("Lyceum International School", [gampaha, wattala]) is None
+    # Two equivalent schools here already (duplicates): a human picks; the same name twice is one.
+    assert _suggest_school("British School Colombo", [school(5, "The British School in Colombo"), school(11, "British School of Colombo")]) is None
+    assert _suggest_school("Elizabeth Moir", [school(12, "Elizabeth Moir School"), school(13, "Elizabeth Moir school")]) == 12
+    assert _suggest_school("Anything", []) == "new"
+
+
+def test_school_candidates_include_same_words_and_rank_them_first(client: TestClient, session: Session) -> None:
+    near = Institution(name="British School Kandy")  # higher score, a different branch
+    same = Institution(name="The British School in Colombo")  # low score, same school
+    session.add_all([near, same])
+    session.commit()
+    with respx.mock:
+        register_simple("open", school="British School of Colombo")
+        job = _create(client, "open")["jobs"][0]
+    [issue] = _issues(job, "school_similar")
+    assert issue["candidates"][0]["id"] == same.id
+    assert issue["suggested"] == same.id
+
+
+def test_swing_teams_get_no_school(session: Session) -> None:
+    with respx.mock:
+        register_simple("open", school="Swing")
+        report = import_tournament(BASE_URL, "open", session=session)
+    assert session.exec(select(Institution)).all() == []
+    assert all(t.institution_id is None for t in session.exec(select(Team)).all())
+    assert all(d.institution_id is None for d in session.exec(select(Debater)).all())
+    assert [i for i in report.issues if i.code == "composite_school"]
+    assert not [i for i in report.issues if i.code == "unresolved_institution"]
+
+
+def _school(session: Session, name: str = "Royal College Colombo") -> Institution:
+    school = Institution(name=name)
+    session.add(school)
+    session.commit()
+    return school
+
+
+def _judge_resolution(report) -> tuple[str, int]:
+    [res] = [r for r in report.resolutions if r.kind == "judge"]
+    return res.how, res.local_id
+
+
+def test_first_name_only_is_never_matched_or_suggested(session: Session) -> None:
+    home = _school(session)
+    debater = Debater(full_name="Kamal", institution_id=home.id)
+    judge = Judge(full_name="Akindu", institution_id=None)
+    session.add_all([debater, judge])
+    session.commit()
+    with respx.mock:
+        register_simple("open", school=home.name, speakers=["Kamal", "Nimal Silva", "Sunil Fernando"], judges=["Akindu"])
+        report = import_tournament(BASE_URL, "open", session=session, dry_run=True)
+    namesakes = {i.upstream_name: i for i in report.issues if i.code == "person_namesake"}
+    assert namesakes["Kamal"].suggested == "new" and namesakes["Kamal"].candidates[0].id == debater.id
+    assert namesakes["Akindu"].suggested == "new"
+    assert _judge_resolution(report)[0] == "created"
+
+
+def test_judge_link_needs_no_conflicting_email_or_gender(session: Session) -> None:
+    _school(session)
+    elsewhere = _school(session, "Visakha Vidyalaya")
+    session.add_all(
+        [
+            Judge(full_name="Thithira Jayakody", institution_id=elsewhere.id, email="t@one.lk"),
+            Judge(full_name="Visura Padeniya", institution_id=elsewhere.id, gender="male"),
+            Judge(full_name="Dinuka Perera", institution_id=elsewhere.id),
+        ]
+    )
+    session.commit()
+    judges = [
+        {"name": "Thithira Jayakody", "email": "t@two.lk"},
+        {"name": "Visura Padeniya", "gender": "F"},
+        {"name": "Dinuka Perera", "gender": "M"},
+    ]
+    with respx.mock:
+        register_simple("open", school="Royal College Colombo", judges=judges)
+        report = import_tournament(BASE_URL, "open", session=session, dry_run=True)
+    hows = {r.upstream_name: r.how for r in report.resolutions if r.kind == "judge"}
+    assert hows == {"Thithira Jayakody": "created", "Visura Padeniya": "created", "Dinuka Perera": "name"}
+    suggested = {i.upstream_name: i.suggested for i in report.issues if i.code == "person_namesake"}
+    assert suggested == {"Thithira Jayakody": "new", "Visura Padeniya": "new"}
+
+
+def test_email_needs_a_compatible_name(session: Session) -> None:
+    home = _school(session)
+    holder = Judge(full_name="Coach Fernando", institution_id=home.id, email="debate@royal.lk")
+    initial = Judge(full_name="K. Perera", institution_id=None, email="kp@mail.lk")
+    session.add_all([holder, initial])
+    session.commit()
+    judges = [{"name": "Nimal Silva", "email": "debate@royal.lk"}, {"name": "Kamal Perera", "email": "KP@mail.lk"}]
+    with respx.mock:
+        register_simple("open", school=home.name, judges=judges)
+        report = import_tournament(BASE_URL, "open", session=session, dry_run=True)
+    resolved = {r.upstream_name: (r.how, r.local_id) for r in report.resolutions if r.kind == "judge"}
+    assert resolved["Kamal Perera"] == ("email", initial.id)
+    assert resolved["Nimal Silva"][0] == "created"
+    [issue] = [i for i in report.issues if i.code == "email_other_name"]
+    assert issue.upstream_name == "Nimal Silva" and issue.suggested == "new"
+    assert [c.id for c in issue.candidates] == [holder.id]
+
+
+def test_unknown_email_still_matches_by_name_and_school(session: Session) -> None:
+    home = _school(session)
+    judge = Judge(full_name="Kaveesha Mallawaarachchi", institution_id=home.id)
+    session.add(judge)
+    session.commit()
+    with respx.mock:
+        register_simple("open", school=home.name, judges=[{"name": "Kaveesha Mallawaarachchi", "email": "k@x.lk"}])
+        report = import_tournament(BASE_URL, "open", session=session, dry_run=True)
+    assert _judge_resolution(report) == ("name+institution", judge.id)
+
+
+def test_two_adjudicators_of_one_name_stay_apart(session: Session) -> None:
+    _school(session)
+    with respx.mock:
+        register_simple("open", school="Royal College Colombo", judges=["Dinuka Perera", "Dinuka Perera"])
+        report = import_tournament(BASE_URL, "open", session=session)
+    assert len(session.exec(select(Judge)).all()) == 2
+    assert [i for i in report.issues if i.code == "same_name_twice"]

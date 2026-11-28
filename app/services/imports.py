@@ -571,6 +571,8 @@ def save_decisions(session: Session, job: ImportJob, decisions: ImportOverrides)
     merged = _decisions(job)
     for kind in models:
         merged.for_kind(kind).update(decisions.for_kind(kind))
+    if "tournament_date" in decisions.model_fields_set:
+        merged.tournament_date = decisions.tournament_date
     job.decisions = merged.model_dump(mode="json")
     job.updated_at = _now()
     session.add(job)
