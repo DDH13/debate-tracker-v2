@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlmodel import Session, col, select
 
 from app.api.crud import ListParams, add_crud_routes
-from app.api.deps import SessionDep, get_or_404
+from app.api.deps import SessionDep, get_or_404, merge_errors
 from app.models import (
     Institution,
     Judge,
@@ -17,7 +17,7 @@ from app.models import (
     User,
 )
 from app.services import judges as judge_service
-from app.services import merge
+from app.services import merge, split
 
 router = APIRouter()
 
@@ -67,6 +67,21 @@ def list_judge_records(
 def get_judge_record(judge_id: int, session: SessionDep) -> Judge:
     """The full judge record, personal fields included."""
     return get_or_404(session, Judge, judge_id)
+
+
+@views.get("/{judge_id}/split-info", response_model=list[split.SplitTournament])
+def judge_split_info(judge_id: int, session: SessionDep) -> list[split.SplitTournament]:
+    """The judge's tournaments with their panels and ballots, most recent first."""
+    with merge_errors():
+        return split.split_info_judge(session, judge_id)
+
+
+@views.post("/{judge_id}/split", response_model=split.SplitResult)
+def split_judge(judge_id: int, body: split.JudgeSplitRequest, session: SessionDep) -> split.SplitResult:
+    """Move the panels, ballots and feedback of the chosen tournaments to a new judge (or
+    `target_id`). `dry_run` previews without saving."""
+    with merge_errors():
+        return split.split_judge(session, judge_id, body)
 
 
 @views.get("/{judge_id}/detail", response_model=judge_service.JudgeDetail)

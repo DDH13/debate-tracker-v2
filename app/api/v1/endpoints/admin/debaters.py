@@ -3,9 +3,9 @@ from typing import Literal
 from fastapi import APIRouter, Query
 from sqlmodel import col, func, or_, select
 
-from app.api.deps import SessionDep, get_or_404
+from app.api.deps import SessionDep, get_or_404, merge_errors
 from app.models import Debater, DebaterAdmin
-from app.services import merge
+from app.services import merge, split
 
 router = APIRouter(prefix="/debaters", tags=["admin: debaters"])
 
@@ -54,3 +54,18 @@ def list_debater_records(
 @router.get("/{debater_id}", response_model=DebaterAdmin)
 def get_debater_record(debater_id: int, session: SessionDep) -> Debater:
     return get_or_404(session, Debater, debater_id)
+
+
+@router.get("/{debater_id}/split-info", response_model=list[split.SplitTournament])
+def debater_split_info(debater_id: int, session: SessionDep) -> list[split.SplitTournament]:
+    """The debater's tournaments with their team places and speeches, most recent first."""
+    with merge_errors():
+        return split.split_info_debater(session, debater_id)
+
+
+@router.post("/{debater_id}/split", response_model=split.SplitResult)
+def split_debater(debater_id: int, body: split.DebaterSplitRequest, session: SessionDep) -> split.SplitResult:
+    """Move the team places and speeches of the chosen tournaments to a new debater (or
+    `target_id`). `dry_run` previews without saving."""
+    with merge_errors():
+        return split.split_debater(session, debater_id, body)
