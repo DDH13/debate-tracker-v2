@@ -1,0 +1,16 @@
+.git
+.venv
+venv
+.env
+.env.*
+.cache
+.import-staging
+.pytest_cache
+__pycache__
+*.py[cod]
+*.db
+.DS_Store
+.claude
+tests
+docs
+scripts/tournaments.csv

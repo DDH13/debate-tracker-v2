@@ -35,8 +35,8 @@ def create_user(user_in: UserCreate, session: SessionDep) -> User:
 @router.get("", response_model=list[UserPublic])
 def list_users(
     session: SessionDep,
-    offset: int = 0,
-    limit: int = Query(default=100, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> list[User]:
     return list(session.exec(select(User).order_by(User.name).offset(offset).limit(limit)).all())
 

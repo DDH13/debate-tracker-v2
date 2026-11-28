@@ -15,6 +15,7 @@ from app.models import (
     Tournament,
 )
 from app.services import stats
+from app.services.public import cache
 from app.services.stats.core import display_name
 
 router = APIRouter(tags=["stats"])
@@ -108,8 +109,8 @@ def get_judge_profile(judge_id: int, session: SessionDep) -> JudgeProfile:
 def list_debater_profiles(
     session: SessionDep,
     sort_by: str = "speaker_rank",
-    offset: int = 0,
-    limit: int = Query(default=100, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> list[DebaterProfile]:
     if sort_by not in _DEBATER_SORT_FIELDS:
         raise HTTPException(
@@ -127,8 +128,8 @@ def list_debater_profiles(
 def list_judge_profiles(
     session: SessionDep,
     sort_by: str = "activity_percentile",
-    offset: int = 0,
-    limit: int = Query(default=100, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> list[JudgeProfile]:
     if sort_by not in _JUDGE_SORT_FIELDS:
         raise HTTPException(
@@ -148,7 +149,11 @@ def list_judge_profiles(
 def get_judge_sentiment(
     session: SessionDep, allowed_deviation: float = 0.5
 ) -> list[stats.JudgeSentiment]:
-    return stats.judge_sentiment(session, allowed_deviation)
+    # Whole-field computations open to anyone: cached so repeated calls don't recompute.
+    return cache.cached(
+        ("judge_sentiment", allowed_deviation),
+        lambda: stats.judge_sentiment(session, allowed_deviation),
+    )
 
 
 # --- Global / cross-tournament ---
@@ -161,7 +166,7 @@ def get_global_distribution(session: SessionDep) -> stats.GlobalDistribution:
 
 @router.get("/stats/speaker-leaderboard", response_model=list[stats.LeaderboardEntry])
 def get_speaker_leaderboard(
-    session: SessionDep, limit: int = Query(default=10, le=100)
+    session: SessionDep, limit: int = Query(default=10, ge=1, le=100)
 ) -> list[stats.LeaderboardEntry]:
     return stats.speaker_leaderboard(session, limit)
 
@@ -212,7 +217,12 @@ def get_debater_scores(
 def list_debater_scores(
     session: SessionDep, normalized: bool = False, include_replies: bool = False
 ) -> list[stats.DebaterScores]:
-    return stats.debater_scores(session, normalized=normalized, include_replies=include_replies)
+    return cache.cached(
+        ("debater_scores", normalized, include_replies),
+        lambda: stats.debater_scores(
+            session, normalized=normalized, include_replies=include_replies
+        ),
+    )
 
 
 @router.get("/debaters/{debater_id}/debates", response_model=list[stats.TournamentDebates])
@@ -247,4 +257,4 @@ def get_judge_debates(
 
 @router.get("/stats/tournament-averages", response_model=list[stats.TournamentAverage])
 def get_tournament_averages(session: SessionDep) -> list[stats.TournamentAverage]:
-    return stats.tournament_averages(session)
+    return cache.cached("tournament_averages", lambda: stats.tournament_averages(session))

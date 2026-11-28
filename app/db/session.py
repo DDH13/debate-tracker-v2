@@ -1,6 +1,7 @@
 from collections.abc import Iterator
+from contextlib import contextmanager
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlmodel import Session, SQLModel, create_engine
 from sqlalchemy.pool import StaticPool
 
@@ -33,6 +34,26 @@ else:
         pool_pre_ping=True,
         echo=settings.sql_echo,
     )
+
+
+# Arbitrary constant for pg_advisory_lock; distinct from the import runner's key.
+_STARTUP_LOCK_KEY = 0x44545354  # "DTST"
+
+
+@contextmanager
+def startup_lock() -> Iterator[None]:
+    """Serializes startup schema work across gunicorn workers (each runs the app lifespan):
+    two workers running `create_all` against a fresh Postgres database at once can collide
+    creating the same enum type or table. A no-op on SQLite."""
+    if engine.dialect.name != "postgresql":
+        yield
+        return
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.execute(text("SELECT pg_advisory_lock(:key)"), {"key": _STARTUP_LOCK_KEY})
+        try:
+            yield
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _STARTUP_LOCK_KEY})
 
 
 def init_db() -> None:

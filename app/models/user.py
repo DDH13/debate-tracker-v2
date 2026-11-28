@@ -6,6 +6,11 @@ from sqlmodel import Field, Relationship, SQLModel
 from app.models.enums import UserRole
 
 
+# Argon2 hashes whatever it's given; a cap keeps an unauthenticated multi-MB "password" from
+# tying up a worker.
+MAX_PASSWORD_LENGTH = 128
+
+
 def normalize_email(email: str) -> str:
     return email.strip().lower()
 
@@ -31,7 +36,7 @@ class User(UserBase, table=True):
 
 
 class UserCreate(UserBase):
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
     person_id: int | None = None
 
     @field_validator("email")
@@ -60,7 +65,7 @@ class UserUpdate(SQLModel):
 
 
 class PasswordReset(SQLModel):
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
 
 
 class AuthSession(SQLModel, table=True):

@@ -1,11 +1,16 @@
-fastapi
-sqlmodel
-uvicorn[standard]
-uvicorn-worker
-gunicorn
-psycopg[binary]
-pydantic-settings
-pwdlib[argon2]
-pytest
-httpx
-respx
+# Runtime dependencies, pinned to the versions the test suite last passed on. To upgrade:
+# bump a pin, `.venv/bin/pip install -r requirements-dev.txt`, `make test`.
+fastapi==0.141.1
+starlette==1.6.0
+sqlmodel==0.0.39
+SQLAlchemy==2.0.51
+pydantic==2.13.4
+pydantic-settings==2.15.0
+python-dotenv==1.2.2
+uvicorn[standard]==0.52.1
+uvicorn-worker==0.4.0
+gunicorn==26.0.0
+psycopg[binary]==3.3.4
+pwdlib[argon2]==0.3.1
+argon2-cffi==25.1.0
+httpx==0.28.1

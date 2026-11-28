@@ -1,7 +1,16 @@
-.PHONY: dev test user import-registrations db-create db-indexes db-seed db-drop db-truncate db-reset
+.PHONY: dev prod test user import-registrations db-create db-indexes db-seed db-drop db-truncate db-reset
 
 dev:
 	.venv/bin/gunicorn app.main:app -k uvicorn_worker.UvicornWorker -w 2 --reload
+
+# Production server: no --reload, access log to stdout, proxy headers trusted only from
+# FORWARDED_ALLOW_IPS (the reverse proxy's address). --timeout covers POST /stats/refresh,
+# which runs inside the request. See docs/deployment.md.
+prod:
+	.venv/bin/gunicorn app.main:app -k uvicorn_worker.UvicornWorker \
+		-w $(or $(WORKERS),2) --bind 0.0.0.0:$(or $(PORT),8000) \
+		--timeout 120 --graceful-timeout 30 --keep-alive 5 \
+		--access-logfile - --forwarded-allow-ips "$(or $(FORWARDED_ALLOW_IPS),127.0.0.1)"
 
 test:
 	.venv/bin/pytest

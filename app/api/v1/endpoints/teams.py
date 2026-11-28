@@ -43,8 +43,8 @@ def create_team(tournament_id: int, team_in: TeamCreate, session: SessionDep) ->
 def list_teams(
     tournament_id: int,
     session: SessionDep,
-    offset: int = 0,
-    limit: int = Query(default=100, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> list[Team]:
     get_or_404(session, Tournament, tournament_id)
     return session.exec(
@@ -109,8 +109,8 @@ def add_team_member(
 def list_team_members(
     team_id: int,
     session: SessionDep,
-    offset: int = 0,
-    limit: int = Query(default=100, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> list[TeamMember]:
     get_or_404(session, Team, team_id)
     return session.exec(

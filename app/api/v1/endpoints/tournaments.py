@@ -104,8 +104,8 @@ def preview_tabbycat_import(import_in: TabbycatImportRequest, session: SessionDe
 @router.get("", response_model=list[TournamentPublic])
 def list_tournaments(
     session: SessionDep,
-    offset: int = 0,
-    limit: int = Query(default=100, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> list[Tournament]:
     return session.exec(select(Tournament).offset(offset).limit(limit)).all()
 

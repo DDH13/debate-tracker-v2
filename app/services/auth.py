@@ -17,13 +17,17 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
+def purge_expired_sessions(session: Session) -> None:
+    """Deletes every expired session row (anyone's). Does not commit. Run at startup and on
+    each login, so the table doesn't grow with sessions nobody presents again."""
+    session.exec(delete(AuthSession).where(AuthSession.expires_at <= _utcnow()))
+
+
 def create_auth_session(session: Session, user: User) -> str:
-    """Creates a session for `user`, prunes their expired ones, commits, and returns the raw
+    """Creates a session for `user`, prunes expired ones, commits, and returns the raw
     cookie token (only its hash is stored)."""
     now = _utcnow()
-    for stale in session.exec(select(AuthSession).where(AuthSession.user_id == user.id)).all():
-        if _as_utc(stale.expires_at) <= now:
-            session.delete(stale)
+    purge_expired_sessions(session)
     token = new_session_token()
     session.add(
         AuthSession(

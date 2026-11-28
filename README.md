@@ -8,7 +8,7 @@ if unset.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements-dev.txt
 createdb debate_tracker_v2   # once, if it doesn't exist yet
 ```
 
@@ -25,15 +25,18 @@ typo'd variable name is silently ignored rather than erroring, so double-check s
 
 | Variable              | Default    | Purpose                                                         |
 |------------------------|------------|------------------------------------------------------------------|
-| `DATABASE_URL`         | in-memory SQLite | Postgres (or other SQLAlchemy) connection string.           |
+| `ENVIRONMENT`          | `development` | `production` refuses SQLite, `CORS_ORIGINS=["*"]` and `SEED_ON_STARTUP`, forces a `Secure` cookie and hides `/docs`. See [docs/deployment.md](docs/deployment.md). |
+| `DATABASE_URL`         | in-memory SQLite | Postgres (or other SQLAlchemy) connection string. Required in production. |
 | `SQL_ECHO`             | `false`    | Log every SQL statement SQLAlchemy executes.                     |
 | `SEED_ON_STARTUP`      | `false`    | Run the sample-data seed automatically when the app starts.      |
-| `LOG_LEVEL`            | `DEBUG`    | Root logging level.                                               |
+| `LOG_LEVEL`            | `INFO`     | Level for the app's loggers (`DEBUG` logs import detail, incl. names). |
+| `DOCS_ENABLED`         | on in development, off in production | Serve `/docs`, `/redoc` and `/openapi.json`. |
+| `LOGIN_MAX_FAILURES` / `LOGIN_WINDOW_SECONDS` | `10` / `900` | Failed sign-ins per email or IP before `POST /auth/login` returns 429 (per worker). `0` disables. |
 | `TABBYCAT_BASE_URL`    | unset      | Default Tabbycat instance URL, so it doesn't need to be passed per import request. |
 | `TABBYCAT_API_KEY`     | unset      | Default Tabbycat API token, paired with `TABBYCAT_BASE_URL`.     |
 | `TABBYCAT_CACHE_DIR`   | unset      | Directory for caching Tabbycat API responses. See [caching](#caching-tabbycat-responses) below. |
 | `IMPORT_TRACE`         | `false`    | Verbose per-record tracing during a tournament import.            |
-| `CORS_ORIGINS`         | `["*"]`    | Allowed CORS origins, as a JSON list (e.g. `["https://admin.example.com"]`). |
+| `CORS_ORIGINS`         | `["*"]`    | The UI origin(s), as a JSON list (e.g. `["https://stats.example.org"]`). An explicit list also turns on credentialed CORS and the cross-site write guard. |
 | `SESSION_COOKIE_NAME`  | `dt_session` | Name of the admin session cookie.                              |
 | `SESSION_TTL_DAYS`     | `14`       | How long an admin sign-in lasts.                                   |
 | `SESSION_COOKIE_SECURE` | `false`   | Mark the session cookie `Secure`. Set `true` in production (HTTPS). |
@@ -53,7 +56,10 @@ doesn't notice, and it keeps the listening socket open with nothing behind it, s
 connections hang forever instead of failing.
 
 - API docs: http://localhost:8000/docs
-- Health check: http://localhost:8000/health
+- Health check: http://localhost:8000/health (checks the database; 503 when it's unreachable)
+
+For production use `make prod` (or the `Dockerfile`), never `make dev`: see
+[docs/deployment.md](docs/deployment.md).
 
 ## Test
 
@@ -84,8 +90,13 @@ deactivating a user or resetting their password signs them out immediately.
 
 The cookie defaults assume the UI and API share an origin (the UI's Vite dev proxy, or a
 reverse proxy in production). If they're ever split across sites, set
-`SESSION_COOKIE_SAMESITE=none`, `SESSION_COOKIE_SECURE=true`, an explicit `CORS_ORIGINS`
-list, and add `allow_credentials=True` to the CORS middleware in `app/main.py`.
+`SESSION_COOKIE_SAMESITE=none` and an explicit `CORS_ORIGINS` list (credentialed CORS
+follows from the explicit list). Either way, with an explicit list every `POST` / `PUT` /
+`PATCH` / `DELETE` whose `Origin` (or `Referer`) is neither the API's own host, the
+forwarding proxy's host (`X-Forwarded-Host`) nor a listed origin gets a 403, so the session
+cookie can't be ridden from another site. Requests with neither header (scripts, `curl`)
+pass. Failed sign-ins are throttled (`LOGIN_MAX_FAILURES`), and expired session rows are
+purged at startup and on every login.
 
 ## Member schools and outreach
 

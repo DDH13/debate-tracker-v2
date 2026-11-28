@@ -11,6 +11,7 @@ from app.api.deps import get_session
 from app.core.config import settings
 from app.main import app
 from app.models import User, UserRole
+from app.services import login_throttle
 from app.services.auth import create_auth_session
 
 settings.init_db_on_startup = False  # never create tables or seed rows in the .env database
@@ -18,6 +19,14 @@ settings.seed_on_startup = False
 settings.tabbycat_cache_dir = None  # tests must always hit the respx-mocked client fresh
 settings.import_run_inline = True  # import jobs run inside the request, on the test engine
 settings.public_cache_ttl_seconds = 0  # every test builds its own data; nothing may be cached across them
+
+
+@pytest.fixture(autouse=True)
+def _login_throttle() -> Iterator[None]:
+    """The login brake is process-wide; never let one test's failed logins lock out another."""
+    login_throttle.reset()
+    yield
+    login_throttle.reset()
 
 
 @pytest.fixture(autouse=True)
