@@ -1,4 +1,4 @@
-from app.services.public.brackets import ElimDebate, ElimRound, derive_brackets
+from app.services.public_site.brackets import ElimDebate, ElimRound, derive_brackets
 
 
 def _round(seq: int, name: str, *pairs: tuple[int, int, int | None]) -> ElimRound:

@@ -15,7 +15,7 @@ from app.models import (
     Tournament,
 )
 from app.services import stats
-from app.services.public import cache
+from app.services.public_site import cache
 from app.services.stats.core import display_name
 
 router = APIRouter(tags=["stats"])

@@ -11,10 +11,10 @@ from dataclasses import dataclass, field
 from sqlmodel import Session, select
 
 from app.models import Debate, Debater, Motion, Round, Side, Team, TeamMember, Tournament
-from app.services.public import cache
-from app.services.public.brackets import Bracket, ElimDebate, ElimRound, derive_brackets
-from app.services.public.loaders import person_name, tournament_ref
-from app.services.public.schemas import TournamentRef
+from app.services.public_site import cache
+from app.services.public_site.brackets import Bracket, ElimDebate, ElimRound, derive_brackets
+from app.services.public_site.loaders import person_name, tournament_ref
+from app.services.public_site.schemas import TournamentRef
 from app.services.stats import tournament as tournament_stats
 
 

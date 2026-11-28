@@ -1,9 +1,9 @@
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import SessionDep
-from app.services.public import lists
-from app.services.public import tournament as tournament_page
-from app.services.public.snapshots import tournament_snapshot
+from app.services.public_site import lists
+from app.services.public_site import tournament as tournament_page
+from app.services.public_site.snapshots import tournament_snapshot
 
 router = APIRouter(prefix="/tournaments", tags=["public"])
 

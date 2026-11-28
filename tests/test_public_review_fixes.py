@@ -6,7 +6,7 @@ from sqlmodel import Session, delete, select
 
 from app.core.config import settings
 from app.models import Debate, DebateJudge, Team, TeamMember
-from app.services.public import cache
+from app.services.public_site import cache
 from tests.helpers import _build_debate_scaffold, _full_score_sheet, assert_constant_queries, build_tournament
 
 API = "/api/v1"

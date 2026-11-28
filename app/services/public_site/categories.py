@@ -18,9 +18,9 @@ from typing import Literal
 from sqlmodel import Session, SQLModel, select
 
 from app.models import Ballot, SpeakerPosition, SpeakerScore
-from app.services.public import cache
-from app.services.public.field import MIN_JUDGE_BALLOTS
-from app.services.public.schemas import Metric, metric
+from app.services.public_site import cache
+from app.services.public_site.field import MIN_JUDGE_BALLOTS
+from app.services.public_site.schemas import Metric, metric
 
 MIN_SEPARATION_MARKS = 30
 

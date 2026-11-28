@@ -26,10 +26,10 @@ from app.models import (
     SpeakerScore,
     Team,
 )
-from app.services.public import cache
-from app.services.public.schools import latest_team_school, school_id
-from app.services.public.snapshots import elim_rounds_by_tournament, team_finishes
-from app.services.public.brackets import derive_brackets
+from app.services.public_site import cache
+from app.services.public_site.schools import latest_team_school, school_id
+from app.services.public_site.snapshots import elim_rounds_by_tournament, team_finishes
+from app.services.public_site.brackets import derive_brackets
 
 MIN_DEBATER_SPEECHES = 3
 MIN_JUDGE_BALLOTS = 5

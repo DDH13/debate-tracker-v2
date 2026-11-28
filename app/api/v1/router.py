@@ -11,7 +11,7 @@ from app.api.v1.endpoints import (
     judges,
     me,
     motions,
-    public,
+    public_site,
     rounds,
     stats,
     teams,
@@ -39,6 +39,6 @@ for public_router in (
     api_router.include_router(public_router, dependencies=[Depends(require_board_for_writes)])
 
 # Page endpoints for the public site (reads only; writes would need a board user).
-api_router.include_router(public.router, dependencies=[Depends(require_board_for_writes)])
+api_router.include_router(public_site.router, dependencies=[Depends(require_board_for_writes)])
 
 api_router.include_router(admin.router, dependencies=[Depends(require_board)])

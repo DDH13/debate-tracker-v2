@@ -23,9 +23,9 @@ from app.models import (
     Team,
     TeamMember,
 )
-from app.services.public import field
-from app.services.public.loaders import debater_refs, institution_ref, judge_refs, person_name
-from app.services.public.schemas import (
+from app.services.public_site import field
+from app.services.public_site.loaders import debater_refs, institution_ref, judge_refs, person_name
+from app.services.public_site.schemas import (
     InstitutionRef,
     Metric,
     PersonRef,
@@ -35,8 +35,8 @@ from app.services.public.schemas import (
     metric,
     win_loss,
 )
-from app.services.public.schools import latest_team_school, school_id
-from app.services.public.snapshots import tournament_snapshot
+from app.services.public_site.schools import latest_team_school, school_id
+from app.services.public_site.snapshots import tournament_snapshot
 from app.services.stats.history import tournament_averages
 
 FINISH_ORDER = ["champion", "finalist", "semi", "quarter", "octo", "broke"]

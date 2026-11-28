@@ -2,8 +2,8 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import SessionDep, get_or_404
 from app.models import Institution
-from app.services.public import institution as institution_page
-from app.services.public import lists
+from app.services.public_site import institution as institution_page
+from app.services.public_site import lists
 
 router = APIRouter(prefix="/institutions", tags=["public"])
 

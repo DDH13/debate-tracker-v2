@@ -196,3 +196,14 @@ def test_health_checks_the_database(anon_client: TestClient) -> None:
 )
 def test_list_paging_is_bounded(client: TestClient, path: str) -> None:
     assert client.get(path).status_code == 422
+
+
+def test_no_python_package_is_named_public() -> None:
+    """Vercel's Python bundler leaves `public/` directories out of the function (they're
+    treated as static files), so a package named `public` imports locally and fails with
+    ModuleNotFoundError in production."""
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parent.parent / "app"
+    offenders = [p for p in app_dir.rglob("public") if p.is_dir()]
+    assert offenders == []

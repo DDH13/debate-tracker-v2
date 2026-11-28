@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import SessionDep
-from app.services.public import search as search_service
+from app.services.public_site import search as search_service
 
 router = APIRouter(tags=["public"])
 

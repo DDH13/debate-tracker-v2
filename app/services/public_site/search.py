@@ -7,9 +7,9 @@ from sqlalchemy import ColumnElement, case
 from sqlmodel import Session, SQLModel, col, select
 
 from app.models import Debater, DebaterProfile, Institution, Judge, JudgeProfile, Team, Tournament
-from app.services.public import field
-from app.services.public.lists import _name_expression
-from app.services.public.schools import latest_team_school, school_id
+from app.services.public_site import field
+from app.services.public_site.lists import _name_expression
+from app.services.public_site.schools import latest_team_school, school_id
 
 MIN_QUERY_LENGTH = 2
 

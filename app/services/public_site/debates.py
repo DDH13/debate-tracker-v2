@@ -20,15 +20,15 @@ from app.models import (
     TeamMember,
     Tournament,
 )
-from app.services.public import scores
-from app.services.public.loaders import (
+from app.services.public_site import scores
+from app.services.public_site.loaders import (
     debater_refs,
     judge_refs,
     round_ref,
     team_refs,
     tournament_ref,
 )
-from app.services.public.schemas import (
+from app.services.public_site.schemas import (
     DebateRow,
     DebateVotes,
     MotionExcerpt,

@@ -1,11 +1,11 @@
-"""Content / style / strategy: the judge arithmetic in `app/services/public/categories.py`,
+"""Content / style / strategy: the judge arithmetic in `app/services/public_site/categories.py`,
 the debater page's category block, the profile rule behind the averages and the list sorts."""
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.services.public import categories as cat
-from app.services.public.categories import Mark
+from app.services.public_site import categories as cat
+from app.services.public_site.categories import Mark
 
 API = "/api/v1"
 
@@ -178,7 +178,7 @@ def test_debater_without_category_marks_gets_an_empty_block(client: TestClient) 
 
 
 def test_field_position_and_result_means(client: TestClient, session) -> None:
-    from app.services.public import field
+    from app.services.public_site import field
 
     _scored(client)
     means = field.field_means(session)

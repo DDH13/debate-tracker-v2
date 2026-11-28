@@ -4,9 +4,9 @@ from sqlalchemy import Integer, cast
 from sqlmodel import Session, SQLModel, func, select
 
 from app.models import Debate, DebateJudge, Judge, Round
-from app.services.public import scores
-from app.services.public.loaders import institution_refs, judge_refs
-from app.services.public.schemas import (
+from app.services.public_site import scores
+from app.services.public_site.loaders import institution_refs, judge_refs
+from app.services.public_site.schemas import (
     DebateVotes,
     InstitutionRef,
     PersonRef,
@@ -16,7 +16,7 @@ from app.services.public.schemas import (
     WinLoss,
     win_loss,
 )
-from app.services.public.snapshots import TournamentSnapshot
+from app.services.public_site.snapshots import TournamentSnapshot
 from app.services.stats import tournament as tournament_stats
 
 
