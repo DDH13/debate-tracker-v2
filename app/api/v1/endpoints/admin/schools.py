@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query
 from sqlmodel import Session, update
 
 from app.api.crud import ListParams, add_crud_routes
-from app.api.deps import SessionDep, get_or_404
+from app.api.deps import SessionDep, get_or_404, merge_errors
 from app.models import (
     Institution,
     Membership,
@@ -27,7 +27,7 @@ from app.models import (
     User,
 )
 from app.models.membership import YEAR_MAX, YEAR_MIN
-from app.services import merge
+from app.services import merge, split
 from app.services import schools as school_service
 
 router = APIRouter()
@@ -63,6 +63,24 @@ institution_views = APIRouter(prefix="/institutions", tags=["admin: schools"])
 @institution_views.get("/merge-info", response_model=list[merge.InstitutionMergeInfo])
 def institution_merge_info(session: SessionDep) -> list[merge.InstitutionMergeInfo]:
     return merge.institution_merge_info(session)
+
+
+@institution_views.get("/{institution_id}/split-info", response_model=list[split.SplitTournament])
+def institution_split_info(institution_id: int, session: SessionDep) -> list[split.SplitTournament]:
+    """The school's tournaments with their teams and registrations, most recent first."""
+    with merge_errors():
+        return split.split_info_institution(session, institution_id)
+
+
+@institution_views.post("/{institution_id}/split", response_model=split.SplitResult)
+def split_institution(
+    institution_id: int, body: split.InstitutionSplitRequest, session: SessionDep
+) -> split.SplitResult:
+    """Move the teams, registrations and tournament-linked records of the chosen tournaments
+    to a new school (or `target_id`); people whose only involvement was there move too.
+    `dry_run` previews without saving."""
+    with merge_errors():
+        return split.split_institution(session, institution_id, body)
 
 
 router.include_router(institution_views)

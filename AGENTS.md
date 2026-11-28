@@ -129,6 +129,21 @@ is covered automatically, and a new public write must be added there deliberatel
 - `app/services/merge.py` — debater/judge/institution merges (one commit each; raises
   `MergeNotFound`/`MergeInvalid`/`MergeConflict`, mapped to 404/422/409 by
   `merge_errors()` in `app/api/deps.py`) plus the duplicate finders and merge-info lists.
+- `app/services/split.py` — the undo for a wrong merge or import match: **split by
+  tournament**. `POST /admin/{debaters|judges|institutions}/{id}/split` moves the rows of the
+  chosen tournaments to a new record (default) or `target_id`; `GET .../split-info` lists the
+  record's tournaments with counts (grouped queries). Debater: team places + speeches (a
+  duplicate `TeamMember` is dropped; a shared ballot is a 409). Judge: panels, ballots and
+  feedback at those tournaments (a shared panel is a 409). School: teams, registrations (409 if
+  the target is registered too) and tournament-linked transactions / feedback / achievements,
+  plus the school of any debater whose teams were *all* moved and any judge whose panels were
+  *all* at those tournaments (`school_moves`). A new person copies the name, never personal
+  fields; a new school needs a name. Squads, judge records, affiliations, memberships,
+  contacts and workshops stay. Both sides' profiles are deleted (stale until
+  `POST /stats/refresh`). `dry_run` rolls back (the console previews with it); errors are the
+  merge service's. **A new tournament-scoped FK to debater / judge / institution belongs in
+  the split as well as the merge.** The console's "Fix identity" section (admin debater, judge
+  and school pages) drives both merge and split.
 - `app/services/tabbycat.py` — importer that pulls a tournament from a
   [Tabbycat](https://tabbycat.readthedocs.io) instance. Tabbycat's model (BP-style 4-team
   debates, multiple motions per round, arbitrary scoring criteria) is richer than this
