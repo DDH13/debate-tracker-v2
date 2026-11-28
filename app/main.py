@@ -18,7 +18,7 @@ from app.db.session import engine, init_db, startup_lock
 from app.services.auth import purge_expired_sessions
 from app.services.finance import ensure_default_categories
 from app.services.imports import sweep_staging
-from app.services.public import cache as public_cache
+from app.services.public_site import cache as public_cache
 
 configure_logging()
 logger = logging.getLogger(__name__)

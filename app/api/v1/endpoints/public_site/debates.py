@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import SessionDep, get_or_404
 from app.models import Debate
-from app.services.public import debates as debate_service
+from app.services.public_site import debates as debate_service
 
 router = APIRouter(prefix="/debates", tags=["public"])
 

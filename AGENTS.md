@@ -41,6 +41,12 @@ purges expired sessions. `POST /auth/login` is throttled per email and per IP
 are capped at `MAX_PASSWORD_LENGTH`. List endpoints bound `offset` (`ge=0`) and `limit`
 (`ge=1`): a new one should too. `tests/test_production.py` covers all of this.
 
+**Never name a directory under `app/` `public`.** Vercel's Python bundler drops `public/`
+directories from the function (it treats them as static files), so the import works locally
+and fails in production with `ModuleNotFoundError`. The public-site packages are
+`app/services/public_site/` and `app/api/v1/endpoints/public_site/` for that reason (their
+URLs are still `/api/v1/public/...`); `tests/test_production.py` guards it.
+
 `app/db/session.py` only uses `StaticPool` + `check_same_thread=False` for the
 in-memory `sqlite://` case (required there since every connection must share the one
 in-memory DB). Postgres uses SQLAlchemy's normal per-thread pool checkout + 
@@ -79,7 +85,7 @@ is covered automatically, and a new public write must be added there deliberatel
 - `app/services/stats/` — pure computation over ballots/debates for tournament, debater,
   and judge statistics. `history.py` holds the raw score / debate / team history queries
   (per-tournament groupings) built on `core`.
-- **Public site API** (`app/api/v1/endpoints/public/`, builders in `app/services/public/`, mounted at
+- **Public site API** (`app/api/v1/endpoints/public_site/`, builders in `app/services/public_site/`, mounted at
   `/api/v1/public` with `require_board_for_writes`): one response per page, so the UI never
   makes a request per row. Endpoints: `tournaments/{id}`, `debates` (explorer) and
   `debates/{id}`, `debaters/{id}`, `judges/{id}`, `institutions/{id}`, the paged lists
@@ -138,7 +144,7 @@ is covered automatically, and a new public write must be added there deliberatel
     database; `create_all` never adds indexes to existing tables. Create-if-not-exists only.
 - `app/services/text.py` — pure name/text normalization (`normalize_text`, `name_key`,
   `split_name`, `tidy_case`, `institution_key`, `jaro_winkler`). No DB access.
-- `app/services/public/schools.py` — the one rule for a debater's school: `Debater.institution_id`, else the institution of their most recent team. Reuse `latest_team_school()` / `school_id()` for the debater page, school roster and counts, debater list and search; never read `Debater.institution_id` alone in the public API.
+- `app/services/public_site/schools.py` — the one rule for a debater's school: `Debater.institution_id`, else the institution of their most recent team. Reuse `latest_team_school()` / `school_id()` for the debater page, school roster and counts, debater list and search; never read `Debater.institution_id` alone in the public API.
 - `app/services/institutions.py` — `find_matching_institution` (key equality, used by the
   importer) and `similar_institutions` (fuzzy, human-facing search only — never auto-match
   on Jaro-Winkler).

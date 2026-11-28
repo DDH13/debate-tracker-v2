@@ -22,12 +22,12 @@ from app.models import (
     Team,
     Tournament,
 )
-from app.services.public import field
-from app.services.public.brackets import derive_brackets
-from app.services.public.loaders import institution_ref, institution_refs, team_refs, tournament_ref
-from app.services.public.schemas import InstitutionRef, Page, PersonRef, TeamRef, TournamentRef
-from app.services.public.schools import latest_team_school, school_id
-from app.services.public.snapshots import elim_rounds_by_tournament
+from app.services.public_site import field
+from app.services.public_site.brackets import derive_brackets
+from app.services.public_site.loaders import institution_ref, institution_refs, team_refs, tournament_ref
+from app.services.public_site.schemas import InstitutionRef, Page, PersonRef, TeamRef, TournamentRef
+from app.services.public_site.schools import latest_team_school, school_id
+from app.services.public_site.snapshots import elim_rounds_by_tournament
 
 Order = Literal["asc", "desc"]
 

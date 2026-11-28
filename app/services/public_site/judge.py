@@ -21,17 +21,17 @@ from app.models import (
     SpeakerPosition,
     SpeakerScore,
 )
-from app.services.public import debates as debate_service
-from app.services.public import categories, field
-from app.services.public.categories import JudgeCategories
-from app.services.public.loaders import (
+from app.services.public_site import debates as debate_service
+from app.services.public_site import categories, field
+from app.services.public_site.categories import JudgeCategories
+from app.services.public_site.loaders import (
     institution_refs,
     judge_refs,
     person_name,
     round_ref,
     tournament_refs,
 )
-from app.services.public.schemas import (
+from app.services.public_site.schemas import (
     DebateRow,
     InstitutionRef,
     Metric,

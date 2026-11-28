@@ -24,15 +24,15 @@ from app.models import (
     Team,
     TeamMember,
 )
-from app.services.public import field, scores
-from app.services.public.categories import CATEGORIES, SCALES, Category
-from app.services.public.loaders import (
+from app.services.public_site import field, scores
+from app.services.public_site.categories import CATEGORIES, SCALES, Category
+from app.services.public_site.loaders import (
     debater_refs,
     institution_refs,
     round_ref,
     team_refs,
 )
-from app.services.public.schemas import (
+from app.services.public_site.schemas import (
     InstitutionRef,
     Metric,
     PersonRef,
@@ -44,8 +44,8 @@ from app.services.public.schemas import (
     metric,
     win_loss,
 )
-from app.services.public.schools import debater_school_id
-from app.services.public.snapshots import tournament_snapshot
+from app.services.public_site.schools import debater_school_id
+from app.services.public_site.snapshots import tournament_snapshot
 from app.services.stats import core
 from app.services.stats.history import tournament_averages
 

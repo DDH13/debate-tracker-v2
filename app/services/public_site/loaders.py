@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from sqlmodel import Session, select
 
 from app.models import Debater, Institution, Judge, Round, Team, Tournament
-from app.services.public.schemas import InstitutionRef, PersonRef, RoundRef, TeamRef, TournamentRef
+from app.services.public_site.schemas import InstitutionRef, PersonRef, RoundRef, TeamRef, TournamentRef
 from app.services.stats import core
 
 
