@@ -33,8 +33,8 @@ def create_round(tournament_id: int, round_in: RoundCreate, session: SessionDep)
 def list_rounds(
     tournament_id: int,
     session: SessionDep,
-    offset: int = 0,
-    limit: int = Query(default=100, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> list[Round]:
     get_or_404(session, Tournament, tournament_id)
     return session.exec(

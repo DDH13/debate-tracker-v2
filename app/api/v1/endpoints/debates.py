@@ -41,8 +41,8 @@ def create_debate(round_id: int, debate_in: DebateCreate, session: SessionDep) -
 def list_debates(
     round_id: int,
     session: SessionDep,
-    offset: int = 0,
-    limit: int = Query(default=100, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> list[Debate]:
     get_or_404(session, Round, round_id)
     return session.exec(

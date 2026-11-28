@@ -50,8 +50,8 @@ def create_institution(institution_in: InstitutionCreate, session: SessionDep) -
 @router.get("", response_model=list[InstitutionPublic])
 def list_institutions(
     session: SessionDep,
-    offset: int = 0,
-    limit: int = Query(default=100, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> list[Institution]:
     return session.exec(select(Institution).offset(offset).limit(limit)).all()
 

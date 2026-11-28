@@ -46,8 +46,8 @@ def list_debaters(
     session: SessionDep,
     institution_id: int | None = None,
     q: str | None = None,
-    offset: int = 0,
-    limit: int = Query(default=100, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> list[Debater]:
     query = select(Debater)
     if institution_id is not None:
